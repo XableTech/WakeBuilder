@@ -189,7 +189,7 @@ WakeBuilder/
 - Files: `src/WakeBuilder/models/trainer.py` (add function)
 
 **2.11 Test Training Pipeline**
-- Test full training with sample wake word
+- Test full training with sample wake word (not unit tests, but end-to-end script from data augmentation to model export and validation); I recorded a sample wake word in `hi-alexa.wav`
 - Verify model export works
 - Verify metadata is correct
 - Command: `uv run pytest tests/test_training.py -v`
