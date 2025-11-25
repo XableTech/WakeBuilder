@@ -167,7 +167,7 @@ WakeBuilder/
 - Files: `tests/test_augmentation.py`
 
 **2.7 Design Classifier Architecture**
-- Create simple feedforward network (2-3 layers)
+- Create a performing feedforward network
 - Input: embeddings, Output: binary classification
 - Files: `src/WakeBuilder/models/classifier.py`
 

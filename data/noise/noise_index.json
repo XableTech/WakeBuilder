@@ -1,0 +1,152 @@
+{
+  "samples": [
+    {
+      "name": "brown_noise_01",
+      "file": "brown_noise_01.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "brown_noise_02",
+      "file": "brown_noise_02.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "brown_noise_03",
+      "file": "brown_noise_03.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "cafe_ambience_01",
+      "file": "cafe_ambience_01.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "cafe_ambience_02",
+      "file": "cafe_ambience_02.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "cafe_ambience_03",
+      "file": "cafe_ambience_03.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "office_ambience_01",
+      "file": "office_ambience_01.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "office_ambience_02",
+      "file": "office_ambience_02.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "office_ambience_03",
+      "file": "office_ambience_03.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "pink_noise_01",
+      "file": "pink_noise_01.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "pink_noise_02",
+      "file": "pink_noise_02.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "pink_noise_03",
+      "file": "pink_noise_03.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "silence_01",
+      "file": "silence_01.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "silence_02",
+      "file": "silence_02.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "silence_03",
+      "file": "silence_03.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "street_ambience_01",
+      "file": "street_ambience_01.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "street_ambience_02",
+      "file": "street_ambience_02.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "street_ambience_03",
+      "file": "street_ambience_03.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "white_noise_01",
+      "file": "white_noise_01.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "white_noise_02",
+      "file": "white_noise_02.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    },
+    {
+      "name": "white_noise_03",
+      "file": "white_noise_03.wav",
+      "duration": 10.0,
+      "sample_rate": 16000,
+      "channels": 1
+    }
+  ],
+  "count": 21
+}
