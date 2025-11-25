@@ -53,7 +53,7 @@ class TrainingConfig:
     mixup_alpha: float = 0.2
 
     # Early stopping
-    patience: int = 15
+    patience: int = 20
     min_delta: float = 1e-4
 
     # Data

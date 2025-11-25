@@ -202,12 +202,12 @@ WakeBuilder/
 ### Tasks
 
 **3.1 Setup FastAPI Application**
-- Create basic FastAPI app with CORS
+- Create FastAPI app with CORS
 - Add health check endpoint
 - Files: `src/WakeBuilder/api/main.py`
 
 **3.2 Implement Background Job System**
-- Simple threading-based job queue
+- Threading-based job queue
 - Track job status in memory
 - Files: `src/WakeBuilder/api/jobs.py`
 
@@ -225,7 +225,7 @@ WakeBuilder/
 
 **3.5 Implement WebSocket Testing Endpoint**
 - WebSocket /api/test/realtime - real-time detection
-- Accept audio chunks, return detection events
+- Accept audio chunks/files, return detection events
 - Files: `src/WakeBuilder/api/routes/testing.py`
 
 **3.6 Implement File Management**
