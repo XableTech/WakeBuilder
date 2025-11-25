@@ -295,12 +295,19 @@ class Trainer:
 
     def create_model(self) -> nn.Module:
         """Create the model based on configuration."""
+        # Build kwargs based on model type
+        kwargs = {}
+        if self.config.model_type == "bc_resnet":
+            kwargs["base_channels"] = self.config.base_channels
+            kwargs["scale"] = self.config.scale
+        elif self.config.model_type == "tc_resnet":
+            kwargs["width_mult"] = self.config.scale
+
         model = create_model(
             model_type=self.config.model_type,
             num_classes=2,
             n_mels=self.config.n_mels,
-            base_channels=self.config.base_channels,
-            scale=self.config.scale,
+            **kwargs,
         )
 
         num_params = count_parameters(model)
@@ -322,12 +329,15 @@ class Trainer:
         )
 
         # OneCycleLR scheduler for better convergence
-        total_steps = num_batches * self.config.num_epochs
+        total_steps = max(num_batches * self.config.num_epochs, 10)  # Minimum 10 steps
+        warmup_pct = min(
+            self.config.warmup_epochs / max(self.config.num_epochs, 1), 0.3
+        )
         self.scheduler = OneCycleLR(
             self.optimizer,
             max_lr=self.config.learning_rate,
             total_steps=total_steps,
-            pct_start=self.config.warmup_epochs / self.config.num_epochs,
+            pct_start=warmup_pct,
             anneal_strategy="cos",
         )
 

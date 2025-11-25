@@ -1,0 +1,19 @@
+{
+  "wake_word": "hi alexa_bc_resnet",
+  "threshold": 0.495050505050505,
+  "model_type": "bc_resnet",
+  "parameters": 128034,
+  "training_config": {
+    "batch_size": 32,
+    "num_epochs": 29,
+    "learning_rate": 0.001
+  },
+  "metrics": {
+    "best_val_loss": 0.20556570092837015,
+    "val_accuracy": 0.9438202247191011,
+    "val_f1": 0.8936170212765958
+  },
+  "version": "1.0.0",
+  "framework": "pytorch",
+  "original_wake_word": "hi alexa"
+}
