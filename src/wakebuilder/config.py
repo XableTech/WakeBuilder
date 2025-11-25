@@ -91,17 +91,90 @@ WEBSOCKET_CONFIG: Dict[str, Any] = {
 }
 
 
+class Config:
+    """Configuration class for WakeBuilder."""
+
+    # Paths
+    PROJECT_ROOT = PROJECT_ROOT
+    SRC_ROOT = SRC_ROOT
+    MODELS_DIR = MODELS_DIR
+    DEFAULT_MODELS_DIR = DEFAULT_MODELS_DIR
+    CUSTOM_MODELS_DIR = CUSTOM_MODELS_DIR
+    DATA_DIR = DATA_DIR
+    TEMP_DIR = TEMP_DIR
+    TTS_VOICES_DIR = TTS_VOICES_DIR
+    BASE_MODEL_PATH = MODELS_DIR / "base" / "model.pt"
+
+    # Audio processing
+    SAMPLE_RATE = AUDIO_CONFIG["sample_rate"]
+    N_MELS = AUDIO_CONFIG["n_mels"]
+    N_FFT = AUDIO_CONFIG["n_fft"]
+    HOP_LENGTH = AUDIO_CONFIG["hop_length"]
+    WIN_LENGTH = AUDIO_CONFIG["win_length"]
+    FMIN = AUDIO_CONFIG["fmin"]
+    FMAX = AUDIO_CONFIG["fmax"]
+    DURATION = AUDIO_CONFIG["duration"]
+    MEL_SPEC_TIME_DIM = 96  # Target time dimension for mel spectrograms
+
+    # Training
+    EMBEDDING_DIM = TRAINING_CONFIG["embedding_dim"]
+    HIDDEN_DIMS = TRAINING_CONFIG["hidden_dims"]
+    DROPOUT_RATE = TRAINING_CONFIG["dropout_rate"]
+    LEARNING_RATE = TRAINING_CONFIG["learning_rate"]
+    BATCH_SIZE = TRAINING_CONFIG["batch_size"]
+    MAX_EPOCHS = TRAINING_CONFIG["max_epochs"]
+    EARLY_STOPPING_PATIENCE = TRAINING_CONFIG["early_stopping_patience"]
+    VALIDATION_SPLIT = TRAINING_CONFIG["validation_split"]
+    WEIGHT_DECAY = TRAINING_CONFIG["weight_decay"]
+
+    # Augmentation
+    SPEED_VARIATIONS = AUGMENTATION_CONFIG["speed_variations"]
+    PITCH_SHIFTS = AUGMENTATION_CONFIG["pitch_shifts"]
+    NOISE_LEVELS = AUGMENTATION_CONFIG["noise_levels"]
+    VOLUME_RANGE = AUGMENTATION_CONFIG["volume_range"]
+    MIN_SYNTHETIC_SAMPLES = AUGMENTATION_CONFIG["min_synthetic_samples"]
+    NEGATIVE_RATIO = AUGMENTATION_CONFIG["negative_ratio"]
+
+    # Evaluation
+    THRESHOLD_RANGE = EVALUATION_CONFIG["threshold_range"]
+    THRESHOLD_STEP = EVALUATION_CONFIG["threshold_step"]
+    DEFAULT_THRESHOLD = EVALUATION_CONFIG["default_threshold"]
+
+    # Wake word validation
+    WAKEWORD_MIN_LENGTH = WAKEWORD_CONFIG["min_length"]
+    WAKEWORD_MAX_LENGTH = WAKEWORD_CONFIG["max_length"]
+    WAKEWORD_MAX_WORDS = WAKEWORD_CONFIG["max_words"]
+    WAKEWORD_ALLOWED_CHARS = WAKEWORD_CONFIG["allowed_chars"]
+
+    # Recording
+    MIN_RECORDINGS = RECORDING_CONFIG["min_recordings"]
+    MAX_RECORDINGS = RECORDING_CONFIG["max_recordings"]
+    MIN_DURATION = RECORDING_CONFIG["min_duration"]
+    MAX_DURATION = RECORDING_CONFIG["max_duration"]
+
+    # API
+    API_HOST = API_CONFIG["host"]
+    API_PORT = API_CONFIG["port"]
+    API_RELOAD = API_CONFIG["reload"]
+    API_LOG_LEVEL = API_CONFIG["log_level"]
+
+    # WebSocket
+    WS_CHUNK_DURATION = WEBSOCKET_CONFIG["chunk_duration"]
+    WS_DETECTION_COOLDOWN = WEBSOCKET_CONFIG["detection_cooldown"]
+
+
 def ensure_directories() -> None:
     """Create all necessary directories if they don't exist."""
     directories = [
         MODELS_DIR,
+        MODELS_DIR / "base",
         DEFAULT_MODELS_DIR,
         CUSTOM_MODELS_DIR,
         DATA_DIR,
         TEMP_DIR,
         TTS_VOICES_DIR,
     ]
-    
+
     for directory in directories:
         directory.mkdir(parents=True, exist_ok=True)
 

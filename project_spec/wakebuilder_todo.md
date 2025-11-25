@@ -45,8 +45,8 @@ WakeBuilder/
 │   │   └── tester.js
 │   └── assets/
 ├── models/
-│   ├── base/                          # Base embedding model
-│   └── defaults/                      # Pre-trained default wake words
+│   ├── base/                          # Base embedding model (.pt)
+│   └── defaults/                      # Pre-trained default wake words (.pt)
 ├── data/
 │   ├── voices/                        # Piper TTS voice models
 │   └── noise/                         # Background noise samples
@@ -55,10 +55,6 @@ WakeBuilder/
 │   ├── download_voices.py             # Download TTS voices
 │   ├── prepare_noise.py               # Prepare noise samples
 │   └── train_defaults.py              # Train default wake words
-├── project_spec/
-│   ├── WakeBuilder_todo.md            # Project TODO list
-│   ├── WakeBuilder_project_description.md    # Project Description
-│   └── WakeBuilder_project_plan.md    # Project Plan
 ├── Dockerfile
 ├── docker-compose.yml
 ├── pyproject.toml
@@ -73,18 +69,19 @@ WakeBuilder/
 ### Tasks
 
 **0.1 Initialize Project**
-- Command: `uv init .` done
+- Command: `uv init WakeBuilder`
+- Command: `cd WakeBuilder`
 - Create the directory structure as shown above
 - Files: All directories and `__init__.py` files
 
-**0.2 Install Core Dependencies** (Would be done manually)
-- Command: `uv pip install torch torchvision torchaudio --index https://download.pytorch.org/whl/cu128`
-- Command: `uv add fastapi uvicorn websockets numpy librosa soundfile onnx onnxruntime`
-- Files: `pyproject.toml` updated automatically by uv after each command
+**0.2 Install Core Dependencies**
+- Command: `uv pip install torch torchvision torchaudio --index https://download.pytorch.org/whl/cu128` then `uv add torch torchaudio torchvision`
+- Command: `uv add fastapi uvicorn websockets numpy librosa soundfile`
+- Files: `pyproject.toml` updated
 
 **0.3 Install Development Dependencies**
 - Command: `uv add --dev pytest pytest-asyncio httpx black ruff mypy`
-- Files: `pyproject.toml` updated automatically by uv after each command
+- Files: `pyproject.toml` updated
 
 **0.4 Setup Configuration**
 - Create basic configuration file with paths and constants
@@ -101,17 +98,18 @@ WakeBuilder/
 ### Tasks
 
 **1.1 Research and Select Base Model**
-- Research options: YAMNet, Google Speech Commands, VGGish
+- Research options: YAMNet, Google Speech Commands, VGGish,... and more; put in mind that I want to build a system that compete with pvporcupine; Also put in mind that I want to build a system that for inference would run on only cpu with best possible speed, accuracy and performance;
 - Document decision and model source URL
 - Files: `README.md` (add notes), `scripts/download_base_model.py`
 
 **1.2 Download Base Model Script**
-- Create script to download and convert base model to ONNX
+- Create script to download and prepare base model in PyTorch format
 - Command: `uv run python scripts/download_base_model.py`
-- Files: `scripts/download_base_model.py`, `models/base/model.onnx`
+- Files: `scripts/download_base_model.py`, `models/base/model.pt`
 
 **1.3 Implement Base Model Loader**
-- Load ONNX model using onnxruntime
+- Load PyTorch model for inference
+- Set model to eval mode for inference
 - Expose function to get embeddings from spectrograms
 - Files: `src/WakeBuilder/models/base_model.py`
 
@@ -184,9 +182,10 @@ WakeBuilder/
 - Save recommended threshold with model
 - Files: `src/WakeBuilder/models/trainer.py` (add function)
 
-**2.10 Export to ONNX**
-- Convert trained PyTorch classifier to ONNX
-- Save with metadata JSON file
+**2.10 Export to PyTorch Format**
+- Save trained PyTorch classifier with torch.save
+- Save with metadata in dict format
+- Optionally apply torch.jit.trace for optimization
 - Files: `src/WakeBuilder/models/trainer.py` (add function)
 
 **2.11 Test Training Pipeline**
@@ -329,7 +328,7 @@ WakeBuilder/
 - Train: "Computer", "Assistant", "System", "Listen", "Voice"
 - Train: "Hey There", "Wake Up", "Hi Computer", "Hi Assistant"
 - Command: `uv run python scripts/train_defaults.py`
-- Files: `scripts/train_defaults.py`, `models/defaults/*.onnx`
+- Files: `scripts/train_defaults.py`, `models/defaults/*.pt`
 
 **5.4 Test Docker Build**
 - Command: `docker build -t WakeBuilder .`

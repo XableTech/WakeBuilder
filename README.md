@@ -239,9 +239,10 @@ Each trained model produces:
 ## 🗺️ Roadmap
 
 ### Phase 1: Foundation (In Progress)
-- [ ] Base speech embedding model integration
-- [ ] Audio preprocessing pipeline
-- [ ] Development environment setup
+- [x] Base speech embedding model research and selection
+- [ ] Base model download and PyTorch conversion
+- [ ] Audio preprocessing pipeline implementation
+- [ ] Development environment validation
 
 ### Phase 2: Training Pipeline
 - [ ] Data augmentation system
