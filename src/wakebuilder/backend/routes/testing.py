@@ -172,6 +172,11 @@ def run_inference(
     Returns:
         Confidence score (0-1)
     """
+    # Check for silence/very low energy audio - return 0 confidence
+    rms = np.sqrt(np.mean(audio ** 2))
+    if rms < 0.005:  # Very quiet audio threshold
+        return 0.0
+    
     # Preprocess audio to mel spectrogram
     spec = preprocessor.process_audio(audio, sample_rate)
 
@@ -183,6 +188,11 @@ def run_inference(
         outputs = model(spec_tensor)
         probs = F.softmax(outputs, dim=1)
         confidence = probs[0, 1].item()  # Probability of wake word class
+    
+    # Scale confidence by audio energy to reduce false positives on quiet audio
+    # This helps prevent high confidence on near-silence
+    energy_scale = min(1.0, rms / 0.05)  # Full confidence at RMS >= 0.05
+    confidence = confidence * (0.3 + 0.7 * energy_scale)  # Keep 30% base, scale 70%
 
     return confidence
 
@@ -409,24 +419,24 @@ async def realtime_testing(websocket: WebSocket) -> None:
 
                     # Check for detection with cooldown
                     current_time = time.time()
-                    detected = confidence >= threshold
-                    in_cooldown = (current_time - last_detection_time) < (
+                    detected = bool(confidence >= threshold)  # Ensure Python bool
+                    in_cooldown = bool((current_time - last_detection_time) < (
                         cooldown_ms / 1000
-                    )
+                    ))
 
                     if detected and not in_cooldown:
                         last_detection_time = current_time
 
-                    # Send detection event
+                    # Send detection event - ensure all values are JSON serializable
                     await websocket.send_json(
                         {
                             "type": "detection",
-                            "detected": detected and not in_cooldown,
-                            "confidence": confidence,
-                            "threshold": threshold,
+                            "detected": bool(detected and not in_cooldown),
+                            "confidence": float(confidence),
+                            "threshold": float(threshold),
                             "timestamp": datetime.now().isoformat(),
-                            "inference_time_ms": inference_time,
-                            "in_cooldown": in_cooldown,
+                            "inference_time_ms": float(inference_time),
+                            "in_cooldown": bool(in_cooldown),
                         }
                     )
 

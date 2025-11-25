@@ -90,16 +90,30 @@ class TrainingRequest(BaseModel):
 class TrainingHyperparameters(BaseModel):
     """Hyperparameters for training (optional customization)."""
 
-    batch_size: int = Field(default=64, ge=8, le=256, description="Training batch size")
+    batch_size: int = Field(default=32, ge=8, le=256, description="Training batch size")
     num_epochs: int = Field(
-        default=100, ge=10, le=500, description="Maximum training epochs"
+        default=150, ge=10, le=500, description="Maximum training epochs"
     )
     learning_rate: float = Field(
-        default=1e-3, gt=0, le=0.1, description="Initial learning rate"
+        default=3e-4, gt=0, le=0.1, description="Initial learning rate"
     )
-    dropout: float = Field(default=0.2, ge=0, le=0.5, description="Dropout probability")
+    dropout: float = Field(default=0.4, ge=0, le=0.7, description="Dropout probability")
     early_stopping_patience: int = Field(
-        default=20, ge=5, le=50, description="Epochs to wait before early stopping"
+        default=25, ge=5, le=50, description="Epochs to wait before early stopping"
+    )
+    # New parameters for improved training
+    weight_decay: float = Field(
+        default=1e-2, ge=0, le=0.5, description="L2 regularization strength"
+    )
+    negative_class_weight: float = Field(
+        default=3.0, ge=1.0, le=5.0, 
+        description="Weight for negative class (higher = fewer false positives)"
+    )
+    spec_augment: bool = Field(
+        default=True, description="Enable SpecAugment (time/frequency masking)"
+    )
+    mixup_alpha: float = Field(
+        default=0.4, ge=0, le=1.0, description="Mixup augmentation strength (0 = disabled)"
     )
 
 
@@ -124,6 +138,16 @@ class EpochMetrics(BaseModel):
     learning_rate: float = Field(..., description="Current learning rate")
 
 
+class DataStats(BaseModel):
+    """Statistics about training data."""
+    
+    num_recordings: int = Field(0, description="Number of original recordings")
+    num_positive_samples: int = Field(0, description="Total positive samples after augmentation")
+    num_negative_samples: int = Field(0, description="Total negative samples generated")
+    num_train_samples: int = Field(0, description="Training set size")
+    num_val_samples: int = Field(0, description="Validation set size")
+
+
 class TrainingProgress(BaseModel):
     """Detailed training progress information."""
 
@@ -135,6 +159,9 @@ class TrainingProgress(BaseModel):
     )
     epoch_history: list[EpochMetrics] = Field(
         default_factory=list, description="History of all epoch metrics"
+    )
+    data_stats: Optional[DataStats] = Field(
+        None, description="Training data statistics"
     )
 
 

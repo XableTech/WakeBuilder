@@ -11,17 +11,22 @@ This module sets up the FastAPI application with:
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import AsyncGenerator
 
 import torch
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
 from ..config import Config, ensure_directories
 from .routes import models, testing, training
 from .schemas import APIInfo, HealthResponse, SystemInfo
+
+# Frontend directory path
+FRONTEND_DIR = Path(__file__).parent.parent.parent.parent / "frontend"
 
 # API metadata for documentation
 API_TITLE = "WakeBuilder API"
@@ -131,9 +136,22 @@ app.include_router(testing.router, prefix="/api/test", tags=["testing"])
 
 
 @app.get("/", include_in_schema=False)
-async def root() -> RedirectResponse:
-    """Redirect root to API documentation."""
-    return RedirectResponse(url="/docs")
+async def root() -> FileResponse:
+    """Serve the frontend application."""
+    index_path = FRONTEND_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    # Fallback to API docs if frontend not built
+    return RedirectResponse(url="/docs")  # type: ignore[return-value]
+
+
+# Mount static files for frontend assets (CSS, JS, images)
+if FRONTEND_DIR.exists():
+    app.mount("/css", StaticFiles(directory=FRONTEND_DIR / "css"), name="css")
+    app.mount("/js", StaticFiles(directory=FRONTEND_DIR / "js"), name="js")
+    app.mount(
+        "/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="assets"
+    )
 
 
 @app.get(

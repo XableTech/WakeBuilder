@@ -71,14 +71,26 @@ class EpochMetrics:
 
 
 @dataclass
+class DataStats:
+    """Statistics about training data."""
+    
+    num_recordings: int = 0
+    num_positive_samples: int = 0
+    num_negative_samples: int = 0
+    num_train_samples: int = 0
+    num_val_samples: int = 0
+
+
+@dataclass
 class TrainingProgress:
     """Detailed training progress information."""
 
     current_epoch: int = 0
     total_epochs: int = 100
-    best_val_loss: float = float("inf")
+    best_val_loss: float = 999.0  # Use large but JSON-serializable value instead of inf
     epochs_without_improvement: int = 0
     epoch_history: list[EpochMetrics] = field(default_factory=list)
+    data_stats: Optional[DataStats] = None
 
 
 @dataclass
@@ -135,8 +147,20 @@ class JobInfo:
         epochs_without_improvement: int,
     ) -> None:
         """Update detailed training progress."""
+        # Preserve existing data_stats if training_progress exists
+        existing_data_stats = None
+        if self.training_progress is not None:
+            existing_data_stats = self.training_progress.data_stats
+            if epoch == 0:
+                print(f"[DEBUG] Epoch 0: existing data_stats = {existing_data_stats}")
+        
         if self.training_progress is None:
             self.training_progress = TrainingProgress()
+            print(f"[DEBUG] Created new TrainingProgress")
+        
+        # Restore data_stats if it was set before
+        if existing_data_stats is not None:
+            self.training_progress.data_stats = existing_data_stats
 
         self.training_progress.current_epoch = epoch
         self.training_progress.total_epochs = total_epochs
@@ -323,8 +347,10 @@ class JobManager:
         if not job:
             return False
 
-        if not self.can_start_job():
-            return False
+        # Check if this job is already running
+        with self._lock:
+            if job_id in self._threads and self._threads[job_id].is_alive():
+                return False
 
         def run_task() -> None:
             try:

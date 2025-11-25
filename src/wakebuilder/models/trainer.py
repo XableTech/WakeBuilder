@@ -40,28 +40,35 @@ class TrainingConfig:
     base_channels: int = 16
     scale: float = 1.0
 
-    # Training
-    batch_size: int = 64
-    num_epochs: int = 100
-    learning_rate: float = 1e-3
-    weight_decay: float = 1e-4
-    warmup_epochs: int = 5
+    # Training - conservative settings for stability
+    batch_size: int = 32
+    num_epochs: int = 150  # More epochs with early stopping
+    learning_rate: float = 3e-4  # Conservative LR
+    weight_decay: float = 1e-2  # Strong regularization
+    warmup_epochs: int = 15  # Longer warmup for stability
 
-    # Regularization
-    dropout: float = 0.2
-    label_smoothing: float = 0.1
-    mixup_alpha: float = 0.2
+    # Regularization - strong to prevent overfitting on small data
+    dropout: float = 0.4  # Higher dropout
+    label_smoothing: float = 0.1  # Moderate smoothing
+    mixup_alpha: float = 0.4  # Stronger mixup
+
+    # SpecAugment parameters (time/frequency masking)
+    spec_augment: bool = True
+    time_mask_param: int = 20  # Max time mask width
+    freq_mask_param: int = 10  # Max frequency mask width
+    num_time_masks: int = 2
+    num_freq_masks: int = 2
+
+    # Class weighting - prioritize reducing false positives
+    negative_class_weight: float = 3.0  # Penalize false positives more strongly
 
     # Early stopping
-    patience: int = 20
+    patience: int = 25  # More patience
     min_delta: float = 1e-4
 
     # Data
-    val_split: float = 0.15
+    val_split: float = 0.2
     num_workers: int = 0  # Windows compatibility
-
-    # Augmentation during training
-    augment_on_fly: bool = True
 
     # Device
     device: str = "auto"
@@ -88,11 +95,66 @@ class TrainingMetrics:
     epochs_without_improvement: int = 0
 
 
+def spec_augment(
+    spec: torch.Tensor,
+    time_mask_param: int = 20,
+    freq_mask_param: int = 10,
+    num_time_masks: int = 2,
+    num_freq_masks: int = 2,
+) -> torch.Tensor:
+    """
+    Apply SpecAugment to a spectrogram.
+    
+    SpecAugment masks random time and frequency bands to improve generalization.
+    Reference: Park et al., "SpecAugment: A Simple Data Augmentation Method for ASR"
+    
+    Args:
+        spec: Spectrogram tensor of shape (time, freq) or (batch, time, freq)
+        time_mask_param: Maximum width of time mask
+        freq_mask_param: Maximum width of frequency mask
+        num_time_masks: Number of time masks to apply
+        num_freq_masks: Number of frequency masks to apply
+    
+    Returns:
+        Augmented spectrogram
+    """
+    spec = spec.clone()
+    
+    # Handle different input shapes
+    if spec.dim() == 2:
+        time_dim, freq_dim = spec.shape
+    else:
+        time_dim, freq_dim = spec.shape[-2], spec.shape[-1]
+    
+    # Apply time masks
+    for _ in range(num_time_masks):
+        t = min(np.random.randint(0, time_mask_param + 1), time_dim - 1)
+        if t > 0:
+            t0 = np.random.randint(0, time_dim - t)
+            if spec.dim() == 2:
+                spec[t0:t0 + t, :] = 0
+            else:
+                spec[..., t0:t0 + t, :] = 0
+    
+    # Apply frequency masks
+    for _ in range(num_freq_masks):
+        f = min(np.random.randint(0, freq_mask_param + 1), freq_dim - 1)
+        if f > 0:
+            f0 = np.random.randint(0, freq_dim - f)
+            if spec.dim() == 2:
+                spec[:, f0:f0 + f] = 0
+            else:
+                spec[..., :, f0:f0 + f] = 0
+    
+    return spec
+
+
 class WakeWordDataset(Dataset):
     """
     Dataset for wake word training.
 
     Stores mel spectrograms and labels for efficient batch loading.
+    Supports SpecAugment for training data augmentation.
     """
 
     def __init__(
@@ -100,12 +162,12 @@ class WakeWordDataset(Dataset):
         spectrograms: list[np.ndarray],
         labels: list[int],
         augment: bool = False,
-        preprocessor: Optional[AudioPreprocessor] = None,
+        spec_augment_config: Optional[dict] = None,
     ):
         self.spectrograms = spectrograms
         self.labels = labels
         self.augment = augment
-        self.preprocessor = preprocessor
+        self.spec_augment_config = spec_augment_config or {}
 
     def __len__(self) -> int:
         return len(self.spectrograms)
@@ -116,6 +178,16 @@ class WakeWordDataset(Dataset):
 
         # Convert to tensor
         spec_tensor = torch.from_numpy(spec).float()
+        
+        # Apply SpecAugment during training
+        if self.augment and self.spec_augment_config:
+            spec_tensor = spec_augment(
+                spec_tensor,
+                time_mask_param=self.spec_augment_config.get("time_mask_param", 20),
+                freq_mask_param=self.spec_augment_config.get("freq_mask_param", 10),
+                num_time_masks=self.spec_augment_config.get("num_time_masks", 2),
+                num_freq_masks=self.spec_augment_config.get("num_freq_masks", 2),
+            )
 
         return spec_tensor, label
 
@@ -199,45 +271,74 @@ class Trainer:
             all_spectrograms.append(spec)
             all_labels.append(0)
 
-        # Generate synthetic negatives
+        # Generate synthetic negatives - MANY MORE for better real-world performance
+        # Target ratio: ~10:1 negative to positive for robust false positive rejection
         if generate_negatives:
-            print("  Generating synthetic negatives...")
+            print("  Generating synthetic negatives (this may take a moment)...", flush=True)
             neg_gen = NegativeExampleGenerator(target_sample_rate=16000)
+            print(f"    TTS available: {neg_gen.tts_available}", flush=True)
 
-            # Silence and noise
-            for sample in neg_gen.generate_silence(num_samples=50):
-                spec = self.preprocessor.process_audio(sample.audio, 16000)
-                all_spectrograms.append(spec)
-                all_labels.append(0)
+            # Silence and noise - CRITICAL for preventing false positives in quiet environments
+            print("    Generating silence samples...", flush=True)
+            silence_count = 0
+            try:
+                for sample in neg_gen.generate_silence(num_samples=600):
+                    spec = self.preprocessor.process_audio(sample.audio, 16000)
+                    all_spectrograms.append(spec)
+                    all_labels.append(0)
+                    silence_count += 1
+            except Exception as e:
+                print(f"      Error generating silence: {e}", flush=True)
+            print(f"      Generated {silence_count} silence samples", flush=True)
 
-            for sample in neg_gen.generate_pure_noise(num_samples=50):
-                spec = self.preprocessor.process_audio(sample.audio, 16000)
-                all_spectrograms.append(spec)
-                all_labels.append(0)
+            print("    Generating noise samples...", flush=True)
+            noise_count = 0
+            try:
+                for sample in neg_gen.generate_pure_noise(num_samples=400):
+                    spec = self.preprocessor.process_audio(sample.audio, 16000)
+                    all_spectrograms.append(spec)
+                    all_labels.append(0)
+                    noise_count += 1
+            except Exception as e:
+                print(f"      Error generating noise: {e}", flush=True)
+            print(f"      Generated {noise_count} noise samples", flush=True)
 
-            # TTS-based negatives (if available)
+            # TTS-based negatives (if available) - CRITICAL for reducing false positives
             if neg_gen.tts_available:
+                # Phonetically similar words - most important for reducing false positives
+                print("    Generating phonetically similar negatives...")
                 count = 0
                 for sample in neg_gen.generate_phonetically_similar(
-                    wake_word, num_voices=3, add_noise=True
+                    wake_word, num_voices=5, add_noise=True
                 ):
                     spec = self.preprocessor.process_audio(sample.audio, 16000)
                     all_spectrograms.append(spec)
                     all_labels.append(0)
                     count += 1
-                    if count >= 200:
+                    if count >= 800:  # Many similar words
                         break
+                print(f"      Generated {count} phonetically similar samples")
 
+                # Random speech - general negative examples (CRITICAL for noisy environments)
+                print("    Generating random speech negatives...")
                 count = 0
                 for sample in neg_gen.generate_random_speech(
-                    num_samples=100, num_voices=3, add_noise=True
+                    num_samples=500, num_voices=5, add_noise=True
                 ):
                     spec = self.preprocessor.process_audio(sample.audio, 16000)
                     all_spectrograms.append(spec)
                     all_labels.append(0)
                     count += 1
-                    if count >= 200:
+                    if count >= 1000:  # Many random speech samples for robust rejection
                         break
+                print(f"      Generated {count} random speech samples")
+            else:
+                # If TTS not available, generate more noise variants
+                print("    TTS not available, generating more noise variants...")
+                for sample in neg_gen.generate_pure_noise(num_samples=800):
+                    spec = self.preprocessor.process_audio(sample.audio, 16000)
+                    all_spectrograms.append(spec)
+                    all_labels.append(0)
 
         num_negative = len(all_spectrograms) - num_positive
         print(f"    Total negative samples: {num_negative}")
@@ -245,34 +346,74 @@ class Trainer:
         # Balance classes
         print(f"\n  Dataset: {num_positive} positive, {num_negative} negative")
 
-        # Split into train/val
-        indices = np.random.permutation(len(all_spectrograms))
-        val_size = int(len(indices) * self.config.val_split)
+        # Store data stats for UI
+        self.data_stats = {
+            "num_recordings": len(positive_audio),
+            "num_positive_samples": num_positive,
+            "num_negative_samples": num_negative,
+            "total_samples": len(all_spectrograms),
+        }
 
-        val_indices = indices[:val_size]
-        train_indices = indices[val_size:]
+        # Stratified split to ensure balanced val set
+        all_labels_arr = np.array(all_labels)
+        pos_indices = np.where(all_labels_arr == 1)[0]
+        neg_indices = np.where(all_labels_arr == 0)[0]
+        
+        np.random.shuffle(pos_indices)
+        np.random.shuffle(neg_indices)
+        
+        val_pos_size = max(int(len(pos_indices) * self.config.val_split), 10)
+        val_neg_size = max(int(len(neg_indices) * self.config.val_split), 20)
+        
+        val_indices = np.concatenate([pos_indices[:val_pos_size], neg_indices[:val_neg_size]])
+        train_indices = np.concatenate([pos_indices[val_pos_size:], neg_indices[val_neg_size:]])
+        
+        np.random.shuffle(val_indices)
+        np.random.shuffle(train_indices)
 
         train_specs = [all_spectrograms[i] for i in train_indices]
         train_labels = [all_labels[i] for i in train_indices]
         val_specs = [all_spectrograms[i] for i in val_indices]
         val_labels = [all_labels[i] for i in val_indices]
 
-        print(f"  Train: {len(train_specs)}, Val: {len(val_specs)}")
+        self.data_stats["num_train_samples"] = len(train_specs)
+        self.data_stats["num_val_samples"] = len(val_specs)
+        
+        print(f"  Train: {len(train_specs)} (pos: {sum(train_labels)}, neg: {len(train_labels) - sum(train_labels)})")
+        print(f"  Val: {len(val_specs)} (pos: {sum(val_labels)}, neg: {len(val_labels) - sum(val_labels)})")
 
-        # Create datasets
-        train_dataset = WakeWordDataset(train_specs, train_labels, augment=True)
+        # SpecAugment config for training
+        spec_augment_config = None
+        if self.config.spec_augment:
+            spec_augment_config = {
+                "time_mask_param": self.config.time_mask_param,
+                "freq_mask_param": self.config.freq_mask_param,
+                "num_time_masks": self.config.num_time_masks,
+                "num_freq_masks": self.config.num_freq_masks,
+            }
+            print(f"  SpecAugment enabled: time_mask={self.config.time_mask_param}, freq_mask={self.config.freq_mask_param}")
+
+        # Create datasets with SpecAugment for training
+        train_dataset = WakeWordDataset(
+            train_specs, train_labels, augment=True, spec_augment_config=spec_augment_config
+        )
         val_dataset = WakeWordDataset(val_specs, val_labels, augment=False)
 
-        # Weighted sampler for class imbalance
+        # Weighted sampler with higher weight for negatives to reduce false positives
         train_labels_arr = np.array(train_labels)
         class_counts = np.bincount(train_labels_arr)
-        class_weights = 1.0 / class_counts
+        # Apply negative class weight to penalize false positives more
+        class_weights = np.array([
+            self.config.negative_class_weight / class_counts[0],  # Negative class
+            1.0 / class_counts[1],  # Positive class
+        ])
         sample_weights = class_weights[train_labels_arr]
         sampler = WeightedRandomSampler(
             weights=sample_weights,
             num_samples=len(train_labels),
             replacement=True,
         )
+        print(f"  Class weights: negative={class_weights[0]:.4f}, positive={class_weights[1]:.4f}")
 
         # Create data loaders
         train_loader = DataLoader(
@@ -366,17 +507,25 @@ class Trainer:
         train_loader: DataLoader,
         epoch: int,
     ) -> tuple[float, float]:
-        """Train for one epoch."""
+        """Train for one epoch with class-weighted loss."""
         self.model.train()
         total_loss = 0.0
         correct = 0
         total = 0
+        
+        # Class weights for loss function - penalize false positives more
+        # Weight[0] = negative class (higher to reduce false accepts)
+        # Weight[1] = positive class
+        class_weights = torch.tensor(
+            [self.config.negative_class_weight, 1.0], 
+            device=self.device
+        )
 
         for batch_idx, (specs, labels) in enumerate(train_loader):
             specs = specs.to(self.device)
             labels = labels.to(self.device)
 
-            # Apply mixup
+            # Apply mixup with probability 0.5
             if self.config.mixup_alpha > 0 and np.random.random() > 0.5:
                 specs, labels_a, labels_b, lam = self.mixup_data(
                     specs, labels, self.config.mixup_alpha
@@ -385,25 +534,31 @@ class Trainer:
                 # Forward pass
                 outputs = self.model(specs)
 
-                # Mixup loss
+                # Mixup loss with class weights
                 loss = lam * F.cross_entropy(
-                    outputs, labels_a, label_smoothing=self.config.label_smoothing
+                    outputs, labels_a, 
+                    weight=class_weights,
+                    label_smoothing=self.config.label_smoothing
                 ) + (1 - lam) * F.cross_entropy(
-                    outputs, labels_b, label_smoothing=self.config.label_smoothing
+                    outputs, labels_b, 
+                    weight=class_weights,
+                    label_smoothing=self.config.label_smoothing
                 )
             else:
-                # Standard forward pass
+                # Standard forward pass with class weights
                 outputs = self.model(specs)
                 loss = F.cross_entropy(
-                    outputs, labels, label_smoothing=self.config.label_smoothing
+                    outputs, labels, 
+                    weight=class_weights,
+                    label_smoothing=self.config.label_smoothing
                 )
 
             # Backward pass
             self.optimizer.zero_grad()
             loss.backward()
 
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            # Gradient clipping for stability
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
 
             self.optimizer.step()
             self.scheduler.step()
@@ -734,19 +889,38 @@ def calibrate_threshold(
             )
         )
 
-    # Find optimal threshold (minimize FAR + FRR, or maximize F1)
-    # For wake word detection, we typically want low FAR with acceptable FRR
-    best_idx = 0
+    # Find optimal threshold for wake word detection
+    # We STRONGLY prioritize low FAR (false activations are very annoying)
+    # Target: FAR < 1% with acceptable FRR < 10%
+    best_idx = len(metrics_list) // 2  # Default to 0.5
     best_score = float("inf")
 
     for i, m in enumerate(metrics_list):
-        # Weight FAR more heavily (false activations are more annoying)
-        score = 2 * m.far + m.frr
+        # Heavy penalty for FAR - we want very few false activations
+        # Score = 10*FAR + FRR, but only consider if FAR < 5%
+        if m.far > 0.05:  # Skip thresholds with too high FAR
+            continue
+        score = 10 * m.far + m.frr
         if score < best_score:
             best_score = score
             best_idx = i
 
+    # If no threshold met FAR < 5%, find the one with lowest FAR
+    if best_score == float("inf"):
+        min_far = float("inf")
+        for i, m in enumerate(metrics_list):
+            if m.far < min_far:
+                min_far = m.far
+                best_idx = i
+
     optimal_threshold = metrics_list[best_idx].threshold
+    
+    # Ensure threshold is at least 0.6 for safety
+    if optimal_threshold < 0.6:
+        for i, m in enumerate(metrics_list):
+            if m.threshold >= 0.6:
+                optimal_threshold = m.threshold
+                break
 
     return optimal_threshold, metrics_list
 

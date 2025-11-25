@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WakeBuilder - Wake Word Training Platform</title>
+    <link rel="stylesheet" href="/css/styles.css">
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-brand">
+            <svg class="nav-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+            </svg>
+            <span>WakeBuilder</span>
+        </div>
+        <div class="nav-links">
+            <a href="#" class="nav-link active" data-page="home">Models</a>
+            <a href="#" class="nav-link" data-page="train">Train</a>
+            <a href="#" class="nav-link" data-page="test">Test</a>
+            <a href="/docs" class="nav-link" target="_blank">API Docs</a>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="container">
+        <!-- Home Page: Model Library -->
+        <section id="page-home" class="page active">
+            <div class="page-header">
+                <h1>Wake Word Models</h1>
+                <button class="btn btn-primary" id="btn-new-model">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="5" x2="12" y2="19"/>
+                        <line x1="5" y1="12" x2="19" y2="12"/>
+                    </svg>
+                    Train New Model
+                </button>
+            </div>
+            
+            <div class="model-filters">
+                <button class="filter-btn active" data-filter="all">All</button>
+                <button class="filter-btn" data-filter="custom">Custom</button>
+                <button class="filter-btn" data-filter="default">Default</button>
+            </div>
+
+            <div id="models-grid" class="models-grid">
+                <!-- Models will be loaded here -->
+                <div class="loading-spinner">Loading models...</div>
+            </div>
+        </section>
+
+        <!-- Training Page: Wizard -->
+        <section id="page-train" class="page">
+            <div class="wizard">
+                <!-- Progress Steps -->
+                <div class="wizard-progress">
+                    <div class="wizard-step active" data-step="1">
+                        <div class="step-number">1</div>
+                        <div class="step-label">Wake Word</div>
+                    </div>
+                    <div class="wizard-step" data-step="2">
+                        <div class="step-number">2</div>
+                        <div class="step-label">Record</div>
+                    </div>
+                    <div class="wizard-step" data-step="3">
+                        <div class="step-number">3</div>
+                        <div class="step-label">Training</div>
+                    </div>
+                    <div class="wizard-step" data-step="4">
+                        <div class="step-number">4</div>
+                        <div class="step-label">Results</div>
+                    </div>
+                </div>
+
+                <!-- Step 1: Wake Word Input -->
+                <div class="wizard-content" id="step-1">
+                    <h2>Choose Your Wake Word</h2>
+                    <p class="step-description">
+                        Enter a wake word (1-2 words, letters only). Choose something unique and easy to pronounce.
+                    </p>
+                    
+                    <div class="form-group">
+                        <label for="wake-word-input">Wake Word</label>
+                        <input type="text" id="wake-word-input" 
+                               placeholder="e.g., Hey Computer" 
+                               maxlength="30"
+                               pattern="[A-Za-z\s]+"
+                               autocomplete="off">
+                        <div class="input-hint">2-30 characters, letters and spaces only</div>
+                        <div class="input-error" id="wake-word-error"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="model-type-select">Model Type</label>
+                        <select id="model-type-select">
+                            <option value="bc_resnet">BC-ResNet (Higher Accuracy)</option>
+                            <option value="tc_resnet">TC-ResNet (Faster Inference)</option>
+                        </select>
+                        <div class="input-hint">BC-ResNet is recommended for most use cases</div>
+                    </div>
+
+                    <details class="advanced-options">
+                        <summary>Advanced Options</summary>
+                        <div class="options-grid">
+                            <div class="form-group">
+                                <label for="batch-size">Batch Size</label>
+                                <input type="number" id="batch-size" value="32" min="8" max="256">
+                            </div>
+                            <div class="form-group">
+                                <label for="num-epochs">Max Epochs</label>
+                                <input type="number" id="num-epochs" value="150" min="10" max="500">
+                            </div>
+                            <div class="form-group">
+                                <label for="learning-rate">Learning Rate</label>
+                                <input type="number" id="learning-rate" value="0.0003" min="0.0001" max="0.1" step="0.0001">
+                            </div>
+                            <div class="form-group">
+                                <label for="dropout">Dropout</label>
+                                <input type="number" id="dropout" value="0.4" min="0" max="0.7" step="0.05">
+                                <div class="input-hint">Higher = less overfitting</div>
+                            </div>
+                            <div class="form-group">
+                                <label for="negative-weight">Negative Class Weight</label>
+                                <input type="number" id="negative-weight" value="3.0" min="1.0" max="5.0" step="0.5">
+                                <div class="input-hint">Higher = fewer false positives</div>
+                            </div>
+                            <div class="form-group checkbox-group">
+                                <label>
+                                    <input type="checkbox" id="spec-augment" checked>
+                                    SpecAugment (recommended)
+                                </label>
+                                <div class="input-hint">Time/frequency masking for better generalization</div>
+                            </div>
+                        </div>
+                    </details>
+
+                    <div class="wizard-actions">
+                        <button class="btn btn-secondary" id="btn-cancel-train">Cancel</button>
+                        <button class="btn btn-primary" id="btn-next-step1">Continue to Recording</button>
+                    </div>
+                </div>
+
+                <!-- Step 2: Recording -->
+                <div class="wizard-content hidden" id="step-2">
+                    <h2>Record Your Voice</h2>
+                    <p class="step-description">
+                        Record yourself saying "<span id="display-wake-word">your wake word</span>" 
+                        at least 3 times. Vary your tone and speed slightly.
+                    </p>
+
+                    <div class="recording-container">
+                        <div class="recording-visualizer">
+                            <canvas id="waveform-canvas" width="600" height="100"></canvas>
+                        </div>
+                        
+                        <div class="recording-controls">
+                            <button class="btn btn-record" id="btn-record">
+                                <svg viewBox="0 0 24 24" fill="currentColor">
+                                    <circle cx="12" cy="12" r="6"/>
+                                </svg>
+                                <span>Hold to Record</span>
+                            </button>
+                        </div>
+
+                        <div class="recordings-list" id="recordings-list">
+                            <!-- Recordings will appear here -->
+                        </div>
+
+                        <div class="recording-status">
+                            <span id="recording-count">0</span> / 5 recordings
+                            <span class="recording-hint">(minimum 3 required)</span>
+                        </div>
+                    </div>
+
+                    <div class="wizard-actions">
+                        <button class="btn btn-secondary" id="btn-back-step2">Back</button>
+                        <button class="btn btn-primary" id="btn-next-step2" disabled>Start Training</button>
+                    </div>
+                </div>
+
+                <!-- Step 3: Training Progress -->
+                <div class="wizard-content hidden" id="step-3">
+                    <h2>Training in Progress</h2>
+                    <p class="step-description" id="training-phase">Preparing training data...</p>
+
+                    <div class="training-progress">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
+                        </div>
+                        <div class="progress-text">
+                            <span id="progress-percent">0%</span>
+                        </div>
+                    </div>
+
+                    <div class="training-details">
+                        <!-- Data Stats Panel -->
+                        <div class="data-stats-panel" id="data-stats-panel" style="display: none;">
+                            <h3 style="margin-bottom: var(--spacing-md); font-size: 1rem; color: var(--text-secondary);">Training Data</h3>
+                            <div class="data-stats-grid">
+                                <div class="data-stat-item">
+                                    <div class="data-stat-value" id="stat-recordings">-</div>
+                                    <div class="data-stat-label">Recordings</div>
+                                </div>
+                                <div class="data-stat-item">
+                                    <div class="data-stat-value" id="stat-positive">-</div>
+                                    <div class="data-stat-label">Positive Samples</div>
+                                </div>
+                                <div class="data-stat-item">
+                                    <div class="data-stat-value" id="stat-negative">-</div>
+                                    <div class="data-stat-label">Negative Samples</div>
+                                </div>
+                                <div class="data-stat-item">
+                                    <div class="data-stat-value" id="stat-train">-</div>
+                                    <div class="data-stat-label">Train Set</div>
+                                </div>
+                                <div class="data-stat-item">
+                                    <div class="data-stat-value" id="stat-val">-</div>
+                                    <div class="data-stat-label">Val Set</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Hyperparameters Panel -->
+                        <div class="detail-panel">
+                            <h3>Hyperparameters</h3>
+                            <div class="detail-grid" id="hyperparameters-grid">
+                                <div class="detail-item">
+                                    <span class="detail-label">Model Type</span>
+                                    <span class="detail-value" id="hp-model-type">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Batch Size</span>
+                                    <span class="detail-value" id="hp-batch-size">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Learning Rate</span>
+                                    <span class="detail-value" id="hp-learning-rate">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Max Epochs</span>
+                                    <span class="detail-value" id="hp-max-epochs">-</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Epoch Metrics Panel -->
+                        <div class="detail-panel">
+                            <h3>Training Metrics</h3>
+                            <div class="epoch-info">
+                                <span>Epoch <span id="current-epoch">0</span> / <span id="total-epochs">0</span></span>
+                            </div>
+                            <div class="metrics-grid" id="metrics-grid">
+                                <div class="metric-card">
+                                    <div class="metric-value" id="metric-train-loss">-</div>
+                                    <div class="metric-label">Train Loss</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-value" id="metric-val-loss">-</div>
+                                    <div class="metric-label">Val Loss</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-value" id="metric-val-acc">-</div>
+                                    <div class="metric-label">Val Accuracy</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-value" id="metric-val-f1">-</div>
+                                    <div class="metric-label">Val F1</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Training Charts - Side by Side -->
+                        <div class="charts-row">
+                            <div class="detail-panel chart-panel">
+                                <h3>Loss History</h3>
+                                <canvas id="training-chart" width="400" height="220"></canvas>
+                            </div>
+                            <div class="detail-panel chart-panel">
+                                <h3>Accuracy & F1 History</h3>
+                                <canvas id="accuracy-chart" width="400" height="220"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 4: Results -->
+                <div class="wizard-content hidden" id="step-4">
+                    <h2>Training Complete!</h2>
+                    <p class="step-description">
+                        Your wake word model "<span id="result-wake-word">-</span>" has been trained successfully.
+                    </p>
+
+                    <div class="results-container">
+                        <!-- Performance Summary -->
+                        <div class="result-panel">
+                            <h3>Performance Summary</h3>
+                            <div class="performance-grid">
+                                <div class="performance-card">
+                                    <div class="perf-value" id="result-accuracy">-</div>
+                                    <div class="perf-label">Accuracy</div>
+                                </div>
+                                <div class="performance-card">
+                                    <div class="perf-value" id="result-f1">-</div>
+                                    <div class="perf-label">F1 Score</div>
+                                </div>
+                                <div class="performance-card">
+                                    <div class="perf-value" id="result-threshold">-</div>
+                                    <div class="perf-label">Threshold</div>
+                                </div>
+                                <div class="performance-card">
+                                    <div class="perf-value" id="result-params">-</div>
+                                    <div class="perf-label">Parameters</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Training Data Summary -->
+                        <div class="result-panel">
+                            <h3>Training Data</h3>
+                            <div class="detail-grid" id="result-data-grid">
+                                <div class="detail-item">
+                                    <span class="detail-label">Recordings</span>
+                                    <span class="detail-value" id="result-recordings">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Positive Samples</span>
+                                    <span class="detail-value" id="result-positive">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Negative Samples</span>
+                                    <span class="detail-value" id="result-negative">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Total Epochs</span>
+                                    <span class="detail-value" id="result-epochs">-</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Training History Charts -->
+                        <div class="charts-row">
+                            <div class="result-panel chart-panel">
+                                <h3>Loss History</h3>
+                                <canvas id="result-loss-chart" width="400" height="200"></canvas>
+                            </div>
+                            <div class="result-panel chart-panel">
+                                <h3>Accuracy & F1 History</h3>
+                                <canvas id="result-accuracy-chart" width="400" height="200"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- FAR/FRR Chart -->
+                        <div class="result-panel">
+                            <h3>Threshold Analysis</h3>
+                            <canvas id="threshold-chart" width="600" height="250"></canvas>
+                            <div class="chart-legend">
+                                <span class="legend-item"><span class="legend-color far"></span> FAR (False Accept)</span>
+                                <span class="legend-item"><span class="legend-color frr"></span> FRR (False Reject)</span>
+                            </div>
+                        </div>
+
+                        <!-- Download Options -->
+                        <div class="result-panel">
+                            <h3>Download Model</h3>
+                            <div class="download-options">
+                                <button class="btn btn-download" id="btn-download-model">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                        <polyline points="7 10 12 15 17 10"/>
+                                        <line x1="12" y1="15" x2="12" y2="3"/>
+                                    </svg>
+                                    Download Model (.zip)
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="wizard-actions">
+                        <button class="btn btn-secondary" id="btn-train-another">Train Another</button>
+                        <button class="btn btn-primary" id="btn-test-model">Test Model</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Testing Page -->
+        <section id="page-test" class="page">
+            <div class="page-header">
+                <h1>Test Wake Word Detection</h1>
+            </div>
+
+            <div class="test-container">
+                <!-- Model Selection -->
+                <div class="test-panel">
+                    <h3>Select Model</h3>
+                    <select id="test-model-select" class="model-select">
+                        <option value="">-- Select a model --</option>
+                    </select>
+                    <div class="model-info" id="test-model-info">
+                        Select a model to begin testing
+                    </div>
+                </div>
+
+                <!-- Threshold Control -->
+                <div class="test-panel">
+                    <h3>Detection Threshold</h3>
+                    <div class="threshold-control">
+                        <input type="range" id="threshold-slider" min="0" max="100" value="70">
+                        <span id="threshold-value">0.70</span>
+                    </div>
+                    <div class="threshold-hint">
+                        Lower = more sensitive, Higher = fewer false positives (recommended: 0.7-0.9)
+                    </div>
+                </div>
+
+                <!-- Detection Visualization -->
+                <div class="test-panel detection-panel">
+                    <h3>Real-time Detection</h3>
+                    <div class="detection-indicator" id="detection-indicator">
+                        <div class="indicator-circle"></div>
+                        <div class="indicator-text">Say your wake word...</div>
+                    </div>
+                    <div class="confidence-bar">
+                        <div class="confidence-fill" id="confidence-fill"></div>
+                    </div>
+                    <div class="confidence-label">
+                        Confidence: <span id="confidence-value">0%</span>
+                    </div>
+                </div>
+
+                <!-- Controls -->
+                <div class="test-panel">
+                    <div class="test-controls">
+                        <button class="btn btn-primary btn-large" id="btn-start-test" disabled>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                            </svg>
+                            Start Listening
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Detection Log -->
+                <div class="test-panel">
+                    <h3>Detection Log</h3>
+                    <div class="detection-log" id="detection-log">
+                        <div class="log-empty">Detections will appear here...</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Scripts -->
+    <script src="/js/utils.js"></script>
+    <script src="/js/api.js"></script>
+    <script src="/js/audio.js"></script>
+    <script src="/js/charts.js"></script>
+    <script src="/js/trainer.js"></script>
+    <script src="/js/tester.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>

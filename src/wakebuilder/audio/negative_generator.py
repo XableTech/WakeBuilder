@@ -23,8 +23,9 @@ from .augmentation import (
 )
 
 
-# Common English words for random speech generation
+# Common English words for random speech generation - expanded for better coverage
 COMMON_WORDS = [
+    # Basic words
     "the", "be", "to", "of", "and", "a", "in", "that", "have", "I",
     "it", "for", "not", "on", "with", "he", "as", "you", "do", "at",
     "this", "but", "his", "by", "from", "they", "we", "say", "her", "she",
@@ -37,6 +38,27 @@ COMMON_WORDS = [
     "first", "well", "way", "even", "new", "want", "because", "any", "these",
     "give", "day", "most", "us", "hello", "okay", "yes", "please",
     "thank", "sorry", "right", "left", "stop", "start", "open", "close",
+    # Common commands and phrases (likely to cause false positives)
+    "hey", "hi", "play", "pause", "next", "volume", "music", "call",
+    "send", "message", "set", "timer", "alarm", "remind", "weather",
+    "lights", "turn", "off", "on", "help", "search", "find", "show",
+    "tell", "ask", "what's", "where", "when", "why", "how", "who",
+    # Names and greetings
+    "sam", "alex", "max", "hey there", "hi there", "good morning",
+    "good night", "goodbye", "see you", "thanks", "welcome",
+    # Filler words and sounds
+    "um", "uh", "hmm", "ah", "oh", "well", "so", "like", "you know",
+    "actually", "basically", "literally", "seriously", "really",
+    # Conversational phrases that might trigger false positives
+    "I think", "you know what", "let me", "can you", "could you",
+    "would you", "should I", "what if", "how about", "let's go",
+    "come on", "wait a minute", "hold on", "never mind", "forget it",
+    "that's right", "exactly", "absolutely", "definitely", "probably",
+    "maybe", "perhaps", "certainly", "of course", "sure thing",
+    # Background chatter simulation
+    "did you hear", "I was thinking", "the other day", "you see",
+    "anyway", "by the way", "speaking of", "as I was saying",
+    "to be honest", "in my opinion", "I believe", "it seems like",
 ]  # fmt: skip
 
 # Phonetically similar word patterns for common wake words
@@ -77,6 +99,8 @@ def get_phonetically_similar_words(wake_word: str) -> list[str]:
         ("f", "v"), ("v", "f"), ("i", "e"), ("e", "i"),
         ("a", "e"), ("e", "a"), ("t", "d"), ("d", "t"),
         ("p", "b"), ("b", "p"), ("m", "n"), ("n", "m"),
+        ("th", "t"), ("t", "th"), ("sh", "s"), ("s", "sh"),
+        ("ch", "k"), ("k", "ch"), ("ck", "k"), ("k", "ck"),
     ]  # fmt: skip
 
     for old, new in substitutions:
@@ -87,6 +111,24 @@ def get_phonetically_similar_words(wake_word: str) -> list[str]:
     words = wake_word_lower.split()
     if len(words) == 2:
         similar_words.extend(words)
+        # Add with different connectors
+        similar_words.append(f"{words[0]} and {words[1]}")
+        similar_words.append(f"{words[0]} or {words[1]}")
+    
+    # Add truncated versions (first/last syllables) - hard negatives
+    if len(wake_word_lower) > 3:
+        similar_words.append(wake_word_lower[:len(wake_word_lower)//2])
+        similar_words.append(wake_word_lower[len(wake_word_lower)//2:])
+        similar_words.append(wake_word_lower[:-1])  # Missing last char
+        similar_words.append(wake_word_lower[1:])   # Missing first char
+    
+    # Add with common prefixes/suffixes
+    prefixes = ["hey ", "hi ", "oh ", "the ", "a "]
+    suffixes = [" please", " now", " here", " there"]
+    for prefix in prefixes:
+        similar_words.append(prefix + wake_word_lower)
+    for suffix in suffixes:
+        similar_words.append(wake_word_lower + suffix)
 
     # Remove duplicates and the original word
     similar_words = list(set(similar_words))
@@ -252,16 +294,41 @@ class NegativeExampleGenerator:
                 continue
 
     def generate_silence(self, num_samples: int = 20) -> Iterator[AugmentedSample]:
-        """Generate silence/near-silence negative examples."""
+        """Generate silence/near-silence negative examples with various characteristics."""
         for i in range(num_samples):
-            noise_floor = random.uniform(0.0001, 0.005)
-            audio = np.random.randn(self.target_length).astype(np.float32) * noise_floor
+            # Vary the noise floor significantly - from near-zero to low ambient
+            noise_floor = random.uniform(0.00001, 0.01)
+            
+            # Different types of silence/ambient
+            silence_type = random.choice(["pure", "hum", "hiss", "room"])
+            
+            if silence_type == "pure":
+                # Near-perfect silence with tiny random noise
+                audio = np.random.randn(self.target_length).astype(np.float32) * noise_floor
+            elif silence_type == "hum":
+                # Low frequency hum (like electrical hum at 50/60Hz)
+                t = np.linspace(0, self.target_duration, self.target_length)
+                hum_freq = random.choice([50, 60, 100, 120])
+                audio = np.sin(2 * np.pi * hum_freq * t).astype(np.float32) * noise_floor * 5
+                audio += np.random.randn(self.target_length).astype(np.float32) * noise_floor
+            elif silence_type == "hiss":
+                # High frequency hiss (like air conditioning)
+                audio = np.random.randn(self.target_length).astype(np.float32)
+                # Simple high-pass effect
+                audio = np.diff(audio, prepend=audio[0]).astype(np.float32) * noise_floor * 3
+            else:  # room
+                # Room tone - mix of frequencies
+                audio = np.random.randn(self.target_length).astype(np.float32) * noise_floor
+                # Add some low frequency rumble
+                t = np.linspace(0, self.target_duration, self.target_length)
+                rumble = np.sin(2 * np.pi * random.uniform(20, 80) * t).astype(np.float32)
+                audio += rumble * noise_floor * 2
 
             yield AugmentedSample(
                 audio=audio,
                 sample_rate=self.target_sample_rate,
                 label=0,
-                metadata={"source": "silence", "noise_floor": noise_floor},
+                metadata={"source": f"silence_{silence_type}", "noise_floor": noise_floor},
             )
 
     def generate_pure_noise(self, num_samples: int = 30) -> Iterator[AugmentedSample]:
@@ -291,30 +358,37 @@ class NegativeExampleGenerator:
 
     def _generate_synthetic_noise(self, noise_type: str) -> np.ndarray:
         """Generate synthetic noise of specified type."""
-        if noise_type == "white":
-            audio = np.random.randn(self.target_length).astype(np.float32)
-        elif noise_type == "pink":
-            # Simple pink noise via filtering
-            white = np.random.randn(self.target_length)
-            # Apply simple 1/f filter approximation
-            b = [0.049922035, -0.095993537, 0.050612699, -0.004408786]
-            a = [1, -2.494956002, 2.017265875, -0.522189400]
-            from scipy.signal import lfilter
+        try:
+            if noise_type == "white":
+                audio = np.random.randn(self.target_length).astype(np.float32)
+            elif noise_type == "pink":
+                # Simple pink noise via filtering
+                white = np.random.randn(self.target_length)
+                # Apply simple 1/f filter approximation
+                b = [0.049922035, -0.095993537, 0.050612699, -0.004408786]
+                a = [1, -2.494956002, 2.017265875, -0.522189400]
+                try:
+                    from scipy.signal import lfilter
+                    audio = lfilter(b, a, white).astype(np.float32)
+                except ImportError:
+                    # Fallback to white noise if scipy not available
+                    audio = white.astype(np.float32)
+            elif noise_type == "brown":
+                # Brown noise via cumulative sum
+                white = np.random.randn(self.target_length)
+                audio = np.cumsum(white).astype(np.float32)
+            else:
+                audio = np.random.randn(self.target_length).astype(np.float32)
 
-            audio = lfilter(b, a, white).astype(np.float32)
-        elif noise_type == "brown":
-            # Brown noise via cumulative sum
-            white = np.random.randn(self.target_length)
-            audio = np.cumsum(white).astype(np.float32)
-        else:
-            audio = np.random.randn(self.target_length).astype(np.float32)
+            # Normalize
+            max_val = np.abs(audio).max()
+            if max_val > 0:
+                audio = audio / max_val * random.uniform(0.3, 0.7)
 
-        # Normalize
-        max_val = np.abs(audio).max()
-        if max_val > 0:
-            audio = audio / max_val * random.uniform(0.3, 0.7)
-
-        return audio
+            return audio
+        except Exception:
+            # Fallback to simple white noise on any error
+            return np.random.randn(self.target_length).astype(np.float32) * 0.5
 
     def generate_all_negatives(
         self,

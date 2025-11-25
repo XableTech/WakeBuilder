@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 
 from ...config import Config
 from ...models.trainer import Trainer, TrainingConfig, calibrate_threshold
-from ..jobs import PHASE_DESCRIPTIONS, JobInfo, JobStatus, get_job_manager
+from ..jobs import PHASE_DESCRIPTIONS, JobInfo, JobStatus, TrainingProgress, get_job_manager
 from ..schemas import (
     ErrorResponse,
     JobStatus as SchemaJobStatus,
@@ -114,15 +114,20 @@ def run_training_job(
                 f"got {len(audio_files)}"
             )
 
-        # Phase 2: Setup trainer
+        # Phase 2: Setup trainer with improved defaults
         hyperparams = job.hyperparameters or {}
         config = TrainingConfig(
             model_type=job.model_type,
-            batch_size=hyperparams.get("batch_size", 64),
-            num_epochs=hyperparams.get("num_epochs", 100),
-            learning_rate=hyperparams.get("learning_rate", 1e-3),
-            dropout=hyperparams.get("dropout", 0.2),
-            patience=hyperparams.get("early_stopping_patience", 20),
+            batch_size=hyperparams.get("batch_size", 32),
+            num_epochs=hyperparams.get("num_epochs", 150),
+            learning_rate=hyperparams.get("learning_rate", 3e-4),
+            dropout=hyperparams.get("dropout", 0.4),
+            patience=hyperparams.get("early_stopping_patience", 25),
+            # New parameters for improved training
+            weight_decay=hyperparams.get("weight_decay", 1e-2),
+            negative_class_weight=hyperparams.get("negative_class_weight", 2.0),
+            spec_augment=hyperparams.get("spec_augment", True),
+            mixup_alpha=hyperparams.get("mixup_alpha", 0.4),
         )
 
         output_dir = Config.CUSTOM_MODELS_DIR
@@ -144,6 +149,19 @@ def run_training_job(
             augment_positive=True,
             generate_negatives=True,
         )
+
+        # Store data stats in job for UI
+        if hasattr(trainer, 'data_stats') and trainer.data_stats:
+            from ..jobs import DataStats
+            job.training_progress = job.training_progress or TrainingProgress()
+            job.training_progress.data_stats = DataStats(
+                num_recordings=trainer.data_stats.get("num_recordings", 0),
+                num_positive_samples=trainer.data_stats.get("num_positive_samples", 0),
+                num_negative_samples=trainer.data_stats.get("num_negative_samples", 0),
+                num_train_samples=trainer.data_stats.get("num_train_samples", 0),
+                num_val_samples=trainer.data_stats.get("num_val_samples", 0),
+            )
+            print(f"[DEBUG] Data stats set: {job.training_progress.data_stats}")
 
         # Phase 5: Training
         job.update_status(JobStatus.TRAINING, "Training the model...")
@@ -316,6 +334,22 @@ async def start_training(
     learning_rate: Annotated[
         Optional[float], Form(description="Initial learning rate", gt=0, le=0.1)
     ] = None,
+    # New hyperparameters for improved training
+    dropout: Annotated[
+        Optional[float], Form(description="Dropout probability", ge=0, le=0.7)
+    ] = None,
+    negative_class_weight: Annotated[
+        Optional[float], Form(description="Weight for negative class (higher = fewer false positives)", ge=1.0, le=5.0)
+    ] = None,
+    spec_augment: Annotated[
+        Optional[bool], Form(description="Enable SpecAugment (time/frequency masking)")
+    ] = None,
+    weight_decay: Annotated[
+        Optional[float], Form(description="L2 regularization strength", ge=0, le=0.5)
+    ] = None,
+    mixup_alpha: Annotated[
+        Optional[float], Form(description="Mixup augmentation strength", ge=0, le=1.0)
+    ] = None,
 ) -> TrainingStartResponse:
     """
     Start a new training job.
@@ -378,6 +412,17 @@ async def start_training(
         hyperparameters["num_epochs"] = num_epochs
     if learning_rate is not None:
         hyperparameters["learning_rate"] = learning_rate
+    # New hyperparameters
+    if dropout is not None:
+        hyperparameters["dropout"] = dropout
+    if negative_class_weight is not None:
+        hyperparameters["negative_class_weight"] = negative_class_weight
+    if spec_augment is not None:
+        hyperparameters["spec_augment"] = spec_augment
+    if weight_decay is not None:
+        hyperparameters["weight_decay"] = weight_decay
+    if mixup_alpha is not None:
+        hyperparameters["mixup_alpha"] = mixup_alpha
 
     # Create job
     job = job_manager.create_job(
@@ -432,13 +477,32 @@ async def get_training_status(job_id: str) -> TrainingStatusResponse:
     # Convert job to response
     from ..schemas import EpochMetrics as EpochMetricsSchema
     from ..schemas import TrainingProgress as TrainingProgressSchema
+    from ..schemas import DataStats as DataStatsSchema
 
     training_progress = None
     if job.training_progress:
+        data_stats = None
+        if job.training_progress.data_stats:
+            ds = job.training_progress.data_stats
+            data_stats = DataStatsSchema(
+                num_recordings=ds.num_recordings,
+                num_positive_samples=ds.num_positive_samples,
+                num_negative_samples=ds.num_negative_samples,
+                num_train_samples=ds.num_train_samples,
+                num_val_samples=ds.num_val_samples,
+            )
+        else:
+            print(f"[DEBUG] No data_stats in training_progress")
+        
+        # Handle inf values that can't be JSON serialized
+        best_val_loss = job.training_progress.best_val_loss
+        if best_val_loss == float('inf') or best_val_loss != best_val_loss:  # Check for inf or nan
+            best_val_loss = 999.0  # Use a large but valid number
+        
         training_progress = TrainingProgressSchema(
             current_epoch=job.training_progress.current_epoch,
             total_epochs=job.training_progress.total_epochs,
-            best_val_loss=job.training_progress.best_val_loss,
+            best_val_loss=best_val_loss,
             epochs_without_improvement=job.training_progress.epochs_without_improvement,
             epoch_history=[
                 EpochMetricsSchema(
@@ -452,6 +516,7 @@ async def get_training_status(job_id: str) -> TrainingStatusResponse:
                 )
                 for m in job.training_progress.epoch_history
             ],
+            data_stats=data_stats,
         )
 
     hyperparameters = None

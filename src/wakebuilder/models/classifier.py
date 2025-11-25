@@ -202,7 +202,7 @@ class BCResNet(nn.Module):
         base_channels: int = 16,
         scale: float = 1.0,
         use_se: bool = True,
-        dropout: float = 0.2,
+        dropout: float = 0.4,  # Higher default dropout for better generalization
     ):
         super().__init__()
         self.num_classes = num_classes
@@ -219,17 +219,20 @@ class BCResNet(nn.Module):
             nn.Conv2d(1, ch(base_channels), kernel_size=3, padding=1),
             nn.BatchNorm2d(ch(base_channels)),
             nn.SiLU(),
+            nn.Dropout2d(dropout * 0.25),  # Light dropout in stem
         )
 
         # Stages with increasing channels and downsampling
         self.stage1 = nn.Sequential(
             BroadcastedBlock(ch(base_channels), ch(base_channels * 2), stride=2),
             BroadcastedBlock(ch(base_channels * 2), ch(base_channels * 2)),
+            nn.Dropout2d(dropout * 0.5),  # Increasing dropout
         )
 
         self.stage2 = nn.Sequential(
             BroadcastedBlock(ch(base_channels * 2), ch(base_channels * 4), stride=2),
             BroadcastedBlock(ch(base_channels * 4), ch(base_channels * 4)),
+            nn.Dropout2d(dropout * 0.75),
         )
 
         self.stage3 = nn.Sequential(
@@ -243,7 +246,7 @@ class BCResNet(nn.Module):
         else:
             self.se = nn.Identity()
 
-        # Global pooling and classifier
+        # Global pooling and classifier with strong dropout
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.dropout = nn.Dropout(dropout)
         self.classifier = nn.Linear(ch(base_channels * 8), num_classes)
