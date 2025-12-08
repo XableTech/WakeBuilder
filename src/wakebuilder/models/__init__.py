@@ -1,42 +1,55 @@
 """
 Models module for WakeBuilder.
 
-This module contains wake word detection models and training utilities.
+This module contains wake word detection models and training utilities
+using Audio Spectrogram Transformer (AST) for transfer learning.
 
-Recommended models:
-- TCResNet: Best for production (0.6ms latency, 250KB)
-- BCResNet: Best for accuracy (6ms latency, 468KB)
+Architecture:
+- Base: MIT/ast-finetuned-speech-commands-v2 (frozen)
+- Classifier: Trainable feedforward network on AST embeddings
 """
 
 from .classifier import (
-    BCResNet,
-    TCResNet,
+    AST_MODEL_CHECKPOINT,
+    ASTFeatureExtractorWrapper,
+    ASTWakeWordModel,
+    SelfAttentionPooling,
+    WakeWordClassifier,
     count_parameters,
-    create_model,
     get_model_info,
+    load_ast_model,
+    save_wake_word_model,
 )
 from .trainer import (
+    ASTDataset,
+    ASTTrainer,
+    FocalLoss,
     ThresholdMetrics,
     Trainer,
     TrainingConfig,
     TrainingMetrics,
-    WakeWordDataset,
     calibrate_threshold,
     print_threshold_report,
 )
 
 __all__ = [
-    # Models
-    "BCResNet",
-    "TCResNet",
-    "create_model",
+    # AST Model
+    "AST_MODEL_CHECKPOINT",
+    "ASTWakeWordModel",
+    "WakeWordClassifier",
+    "SelfAttentionPooling",
+    "ASTFeatureExtractorWrapper",
+    "load_ast_model",
+    "save_wake_word_model",
     "count_parameters",
     "get_model_info",
     # Training
-    "Trainer",
+    "ASTTrainer",
+    "Trainer",  # Alias for backward compatibility
     "TrainingConfig",
     "TrainingMetrics",
-    "WakeWordDataset",
+    "ASTDataset",
+    "FocalLoss",
     "ThresholdMetrics",
     "calibrate_threshold",
     "print_threshold_report",

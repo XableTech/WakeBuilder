@@ -26,6 +26,12 @@ from .preprocessing import (
     load_audio,
     normalize_audio,
 )
+from .real_data_loader import (
+    MassivePositiveAugmenter,
+    RealNegativeDataLoader,
+    chunk_audio,
+    load_audio_file,
+)
 
 __all__ = [
     # Preprocessing
@@ -46,4 +52,9 @@ __all__ = [
     "NegativeExampleGenerator",
     "generate_random_phrases",
     "get_phonetically_similar_words",
+    # Real data loading
+    "RealNegativeDataLoader",
+    "MassivePositiveAugmenter",
+    "load_audio_file",
+    "chunk_audio",
 ]

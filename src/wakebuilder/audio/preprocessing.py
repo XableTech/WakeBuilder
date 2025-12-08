@@ -64,17 +64,35 @@ def load_audio(
 def normalize_audio(
     audio: np.ndarray,
     target_level: float = -20.0,
+    method: str = "peak",
 ) -> np.ndarray:
     """
-    Normalize audio to target dB level.
+    Normalize audio for consistent input to the model.
+    
+    CRITICAL: This normalization MUST match between training and inference!
+    We use peak normalization (scale to max=0.9) for consistency.
 
     Args:
         audio: Input audio samples
-        target_level: Target dB level (default: -20.0)
+        target_level: Target dB level (only used if method='rms')
+        method: Normalization method:
+            - 'peak': Scale so max absolute value = 0.9 (RECOMMENDED)
+            - 'rms': Scale to target RMS level in dB
 
     Returns:
         Normalized audio
     """
+    if method == "peak":
+        # Peak normalization - consistent and simple
+        # This is what we use during data augmentation, so inference must match
+        max_val = np.abs(audio).max()
+        if max_val > 0.01:  # Avoid division by near-zero
+            normalized = audio / max_val * 0.9
+        else:
+            normalized = audio
+        return normalized.astype(np.float32)
+    
+    # RMS normalization (legacy, not recommended)
     # Calculate current RMS level
     rms = np.sqrt(np.mean(audio**2))
 
@@ -91,7 +109,7 @@ def normalize_audio(
     # Clip to prevent overflow
     normalized = np.clip(normalized, -1.0, 1.0)
 
-    return normalized
+    return normalized.astype(np.float32)
 
 
 def compute_mel_spectrogram(
@@ -192,6 +210,16 @@ class AudioPreprocessor:
     ) -> np.ndarray:
         """
         Process audio into mel spectrogram.
+        
+        CRITICAL: This preprocessing MUST be identical for training and inference!
+        The pipeline is:
+        1. Resample to target sample rate (16kHz)
+        2. Peak normalize audio to max=0.9
+        3. Compute mel spectrogram
+        4. Convert to log scale (dB)
+        5. Transpose to (time, freq)
+        6. Pad/trim to target length
+        7. Standardize spectrogram (zero mean, unit variance)
 
         Args:
             audio: Either audio samples (numpy array) or path to audio file
@@ -219,9 +247,10 @@ class AudioPreprocessor:
                 )
                 sample_rate = self.sample_rate
 
-        # Normalize audio
+        # Normalize audio using PEAK normalization
+        # CRITICAL: This must match the normalization used during data augmentation
         if self.normalize:
-            audio = normalize_audio(audio)
+            audio = normalize_audio(audio, method="peak")
 
         # Compute mel spectrogram
         mel_spec = compute_mel_spectrogram(
@@ -241,7 +270,17 @@ class AudioPreprocessor:
         if self.target_length is not None:
             mel_spec = self._adjust_length(mel_spec, self.target_length)
 
-        return mel_spec
+        # CRITICAL: Standardize spectrogram (zero mean, unit variance)
+        # This makes the model invariant to overall volume and recording conditions
+        # Using both mean and std normalization is more robust than mean-only
+        mel_mean = mel_spec.mean()
+        mel_std = mel_spec.std()
+        if mel_std > 1e-6:  # Avoid division by zero
+            mel_spec = (mel_spec - mel_mean) / mel_std
+        else:
+            mel_spec = mel_spec - mel_mean
+
+        return mel_spec.astype(np.float32)
 
     def _adjust_length(
         self,

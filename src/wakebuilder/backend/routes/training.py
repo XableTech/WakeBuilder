@@ -8,6 +8,7 @@ This module provides endpoints for:
 """
 
 import io
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -19,7 +20,8 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
 from ...config import Config
-from ...models.trainer import Trainer, TrainingConfig, calibrate_threshold
+from ...audio.real_data_loader import RealNegativeDataLoader
+from ...models.trainer import ASTTrainer, TrainingConfig, calibrate_threshold
 from ..jobs import PHASE_DESCRIPTIONS, JobInfo, JobStatus, TrainingProgress, get_job_manager
 from ..schemas import (
     ErrorResponse,
@@ -99,7 +101,7 @@ def run_training_job(
     temp_dir: Path,
 ) -> None:
     """
-    Execute the training job.
+    Execute the training job using AST-based transfer learning.
 
     This function runs in a background thread and updates the job status
     as it progresses through the training pipeline.
@@ -114,31 +116,48 @@ def run_training_job(
                 f"got {len(audio_files)}"
             )
 
-        # Phase 2: Setup trainer with improved defaults
+        # Phase 2: Setup AST trainer
         hyperparams = job.hyperparameters or {}
         config = TrainingConfig(
-            model_type=job.model_type,
+            # Classifier settings
+            classifier_hidden_dims=hyperparams.get("classifier_hidden_dims", [256, 128]),
+            classifier_dropout=hyperparams.get("dropout", 0.5),
+            freeze_base=True,  # Always freeze AST base model
+            # Training settings
             batch_size=hyperparams.get("batch_size", 32),
-            num_epochs=hyperparams.get("num_epochs", 150),
-            learning_rate=hyperparams.get("learning_rate", 3e-4),
-            dropout=hyperparams.get("dropout", 0.4),
-            patience=hyperparams.get("early_stopping_patience", 25),
-            # New parameters for improved training
-            weight_decay=hyperparams.get("weight_decay", 1e-2),
-            negative_class_weight=hyperparams.get("negative_class_weight", 2.0),
-            spec_augment=hyperparams.get("spec_augment", True),
-            mixup_alpha=hyperparams.get("mixup_alpha", 0.4),
+            num_epochs=hyperparams.get("num_epochs", 100),
+            learning_rate=hyperparams.get("learning_rate", 1e-4),
+            weight_decay=hyperparams.get("weight_decay", 1e-3),
+            patience=hyperparams.get("patience", hyperparams.get("early_stopping_patience", 8)),
+            # Regularization (higher values prevent false positives)
+            label_smoothing=hyperparams.get("label_smoothing", 0.25),
+            mixup_alpha=hyperparams.get("mixup_alpha", 0.5),
+            # Focal loss for hard example mining
+            use_focal_loss=hyperparams.get("use_focal_loss", True),
+            focal_alpha=hyperparams.get("focal_alpha", 0.25),
+            focal_gamma=hyperparams.get("focal_gamma", 2.0),
+            # Classifier attention
+            use_attention=hyperparams.get("use_attention", False),
+            # Data settings
+            target_positive_samples=hyperparams.get("target_positive_samples", 4000),
+            use_tts_positives=hyperparams.get("use_tts_positives", True),
+            use_real_negatives=hyperparams.get("use_real_negatives", True),
+            max_real_negatives=hyperparams.get("max_real_negatives", 0),
+            use_hard_negatives=hyperparams.get("use_hard_negatives", True),  # Critical for accuracy
+            # Negative ratios (when max_real_negatives=0)
+            negative_ratio=hyperparams.get("negative_ratio", 1.5),
+            hard_negative_ratio=hyperparams.get("hard_negative_ratio", 2.0),
         )
 
         output_dir = Config.CUSTOM_MODELS_DIR
-        trainer = Trainer(config=config, output_dir=output_dir)
+        trainer = ASTTrainer(config=config, output_dir=output_dir)
 
         # Phase 3: Data augmentation
-        job.update_status(JobStatus.AUGMENTING, "Creating voice variations...")
+        job.update_status(JobStatus.AUGMENTING, "Loading AST model and preparing data...")
 
         # Phase 4: Generate negatives (handled in prepare_data)
         job.update_status(
-            JobStatus.GENERATING_NEGATIVES, "Generating negative examples..."
+            JobStatus.GENERATING_NEGATIVES, "Generating and Loading data..."
         )
 
         # Prepare data
@@ -147,7 +166,6 @@ def run_training_job(
             negative_audio=[],  # Will be generated
             wake_word=job.wake_word,
             augment_positive=True,
-            generate_negatives=True,
         )
 
         # Store data stats in job for UI
@@ -164,7 +182,7 @@ def run_training_job(
             print(f"[DEBUG] Data stats set: {job.training_progress.data_stats}")
 
         # Phase 5: Training
-        job.update_status(JobStatus.TRAINING, "Training the model...")
+        job.update_status(JobStatus.TRAINING, "Training classifier on AST embeddings...")
 
         # Create model and setup training
         trainer.model = trainer.create_model()
@@ -209,7 +227,9 @@ def run_training_job(
             if val_metrics["loss"] < trainer.metrics.best_val_loss - config.min_delta:
                 trainer.metrics.best_val_loss = val_metrics["loss"]
                 trainer.metrics.epochs_without_improvement = 0
-                best_model_state = trainer.model.state_dict().copy()
+                best_model_state = {
+                    k: v.cpu().clone() for k, v in trainer.model.classifier.state_dict().items()
+                }
             else:
                 trainer.metrics.epochs_without_improvement += 1
 
@@ -233,7 +253,7 @@ def run_training_job(
 
         # Restore best model
         if best_model_state is not None:
-            trainer.model.load_state_dict(best_model_state)
+            trainer.model.classifier.load_state_dict(best_model_state)
 
         # Phase 6: Calibration
         job.update_status(JobStatus.CALIBRATING, "Calibrating detection threshold...")
@@ -250,16 +270,31 @@ def run_training_job(
         # Prepare threshold analysis for metadata
         threshold_analysis = [
             {
-                "threshold": m.threshold,
-                "far": m.far,
-                "frr": m.frr,
-                "accuracy": m.accuracy,
-                "precision": m.precision,
-                "recall": m.recall,
-                "f1": m.f1,
+                "threshold": float(m.threshold),
+                "far": float(m.far),
+                "frr": float(m.frr),
+                "accuracy": float(m.accuracy),
+                "precision": float(m.precision),
+                "recall": float(m.recall),
+                "f1": float(m.f1),
             }
             for m in threshold_metrics[::10]  # Sample every 10th threshold
         ]
+
+        # Build training config for metadata
+        training_config = {
+            "batch_size": config.batch_size,
+            "num_epochs": config.num_epochs,
+            "learning_rate": config.learning_rate,
+            "dropout": config.classifier_dropout,
+            "label_smoothing": config.label_smoothing,
+            "mixup_alpha": config.mixup_alpha,
+            "use_focal_loss": config.use_focal_loss,
+            "focal_gamma": config.focal_gamma,
+            "use_attention": config.use_attention,
+            "classifier_hidden_dims": config.classifier_hidden_dims,
+            "weight_decay": config.weight_decay,
+        }
 
         model_dir = trainer.save_model(
             wake_word=job.wake_word,
@@ -267,6 +302,8 @@ def run_training_job(
             metadata={
                 "threshold_analysis": threshold_analysis,
                 "training_time_seconds": time.time() - start_time,
+                "base_model": "MIT/ast-finetuned-speech-commands-v2",
+                "training_config": training_config,
             },
         )
 
@@ -275,9 +312,10 @@ def run_training_job(
             model_path=model_dir,
             metadata={
                 "threshold": optimal_threshold,
-                "val_accuracy": trainer.metrics.val_acc,
-                "val_f1": trainer.metrics.val_f1,
+                "val_accuracy": float(trainer.metrics.val_acc),
+                "val_f1": float(trainer.metrics.val_f1),
                 "epochs_trained": trainer.metrics.epoch + 1,
+                "base_model": "MIT/ast-finetuned-speech-commands-v2",
             },
         )
 
@@ -290,6 +328,76 @@ def run_training_job(
         # Cleanup temp directory
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+# ============================================================================
+# Negative Data Cache Endpoints
+# ============================================================================
+
+@router.get(
+    "/negative-cache/info",
+    summary="Get Negative Data Cache Info",
+    description="Get information about cached negative audio chunks.",
+)
+async def get_negative_cache_info():
+    """Get cache status and chunk count."""
+    loader = RealNegativeDataLoader()
+    cache_info = loader.get_cache_info()
+    file_counts = loader.get_file_count()
+    
+    return {
+        "cached": cache_info["cached"],
+        "chunk_count": cache_info["chunk_count"],
+        "source_files": file_counts["total"],
+        "file_counts": file_counts,
+        "created_at": cache_info.get("created_at"),
+    }
+
+
+@router.post(
+    "/negative-cache/build",
+    summary="Build Negative Data Cache",
+    description="Pre-process all negative audio files and cache chunks for fast loading.",
+)
+async def build_negative_cache(
+    max_workers: int = 4,
+):
+    """Build the negative data cache."""
+    import threading
+    
+    loader = RealNegativeDataLoader()
+    
+    if not loader.available:
+        raise HTTPException(
+            status_code=404,
+            detail="No negative data found in data/negative/ directory"
+        )
+    
+    # Run in background thread
+    def build():
+        loader.build_cache(max_workers=max_workers)
+    
+    thread = threading.Thread(target=build, daemon=True)
+    thread.start()
+    
+    file_counts = loader.get_file_count()
+    return {
+        "message": "Cache building started in background",
+        "source_files": file_counts["total"],
+        "estimated_chunks": file_counts["total"] * 5,  # ~5 chunks per file
+    }
+
+
+@router.delete(
+    "/negative-cache",
+    summary="Clear Negative Data Cache",
+    description="Delete all cached negative audio chunks.",
+)
+async def clear_negative_cache():
+    """Clear the cache."""
+    loader = RealNegativeDataLoader()
+    loader.clear_cache()
+    return {"message": "Cache cleared"}
 
 
 @router.post(
@@ -312,9 +420,10 @@ and model configuration. The training will run in the background.
 - Minimum recordings: 3
 - Maximum recordings: 5
 
-**Model Types:**
-- `tc_resnet`: Fast inference (~0.6ms), good for production
-- `bc_resnet`: Higher accuracy, recommended for best results
+**Model:**
+Uses Audio Spectrogram Transformer (AST) with transfer learning from
+MIT/ast-finetuned-speech-commands-v2. The base model is frozen and only
+the classifier head is trained.
 """,
 )
 async def start_training(
@@ -323,8 +432,8 @@ async def start_training(
         list[UploadFile], File(description="Audio recordings of the wake word (3-5)")
     ],
     model_type: Annotated[
-        ModelType, Form(description="Model architecture to use")
-    ] = ModelType.BC_RESNET,
+        ModelType, Form(description="Model architecture (AST recommended)")
+    ] = ModelType.AST,
     batch_size: Annotated[
         Optional[int], Form(description="Training batch size", ge=8, le=256)
     ] = None,
@@ -334,21 +443,47 @@ async def start_training(
     learning_rate: Annotated[
         Optional[float], Form(description="Initial learning rate", gt=0, le=0.1)
     ] = None,
-    # New hyperparameters for improved training
+    # Regularization hyperparameters (balanced defaults)
     dropout: Annotated[
-        Optional[float], Form(description="Dropout probability", ge=0, le=0.7)
+        Optional[float], Form(description="Dropout probability (default: 0.5)", ge=0, le=0.7)
     ] = None,
-    negative_class_weight: Annotated[
-        Optional[float], Form(description="Weight for negative class (higher = fewer false positives)", ge=1.0, le=5.0)
-    ] = None,
-    spec_augment: Annotated[
-        Optional[bool], Form(description="Enable SpecAugment (time/frequency masking)")
+    label_smoothing: Annotated[
+        Optional[float], Form(description="Label smoothing factor (default: 0.25)", ge=0, le=0.4)
     ] = None,
     weight_decay: Annotated[
-        Optional[float], Form(description="L2 regularization strength", ge=0, le=0.5)
+        Optional[float], Form(description="L2 regularization strength (default: 0.001)", ge=0, le=0.5)
     ] = None,
     mixup_alpha: Annotated[
-        Optional[float], Form(description="Mixup augmentation strength", ge=0, le=1.0)
+        Optional[float], Form(description="Mixup augmentation strength (default: 0.5)", ge=0, le=1.0)
+    ] = None,
+    # Model enhancements
+    use_focal_loss: Annotated[
+        Optional[bool], Form(description="Use focal loss for hard example mining (default: true)")
+    ] = None,
+    focal_gamma: Annotated[
+        Optional[float], Form(description="Focal loss gamma (default: 2.0)", ge=0.5, le=5.0)
+    ] = None,
+    use_attention: Annotated[
+        Optional[bool], Form(description="Use self-attention in classifier (default: false)")
+    ] = None,
+    classifier_hidden_dims: Annotated[
+        Optional[str], Form(description="Classifier hidden dims as JSON array (default: [256, 128])")
+    ] = None,
+    # Data generation settings
+    target_positive_samples: Annotated[
+        Optional[int], Form(description="Target positive samples (default: 6000)", ge=100, le=20000)
+    ] = None,
+    use_tts_positives: Annotated[
+        Optional[bool], Form(description="Generate TTS positive samples (default: true)")
+    ] = None,
+    use_real_negatives: Annotated[
+        Optional[bool], Form(description="Use real negative data from data/negative/ (default: true)")
+    ] = None,
+    max_real_negatives: Annotated[
+        Optional[int], Form(description="Max real negative samples (0 = no limit)", ge=0, le=100000)
+    ] = None,
+    use_hard_negatives: Annotated[
+        Optional[bool], Form(description="Generate hard negatives from similar-sounding words (default: true)")
     ] = None,
 ) -> TrainingStartResponse:
     """
@@ -404,7 +539,7 @@ async def start_training(
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise
 
-    # Build hyperparameters
+    # Build hyperparameters with balanced defaults
     hyperparameters = {}
     if batch_size is not None:
         hyperparameters["batch_size"] = batch_size
@@ -412,17 +547,38 @@ async def start_training(
         hyperparameters["num_epochs"] = num_epochs
     if learning_rate is not None:
         hyperparameters["learning_rate"] = learning_rate
-    # New hyperparameters
+    # Regularization hyperparameters
     if dropout is not None:
         hyperparameters["dropout"] = dropout
-    if negative_class_weight is not None:
-        hyperparameters["negative_class_weight"] = negative_class_weight
-    if spec_augment is not None:
-        hyperparameters["spec_augment"] = spec_augment
+    if label_smoothing is not None:
+        hyperparameters["label_smoothing"] = label_smoothing
     if weight_decay is not None:
         hyperparameters["weight_decay"] = weight_decay
     if mixup_alpha is not None:
         hyperparameters["mixup_alpha"] = mixup_alpha
+    # Model enhancements
+    if use_focal_loss is not None:
+        hyperparameters["use_focal_loss"] = use_focal_loss
+    if focal_gamma is not None:
+        hyperparameters["focal_gamma"] = focal_gamma
+    if use_attention is not None:
+        hyperparameters["use_attention"] = use_attention
+    if classifier_hidden_dims is not None:
+        try:
+            hyperparameters["classifier_hidden_dims"] = json.loads(classifier_hidden_dims)
+        except json.JSONDecodeError:
+            pass  # Use default if parsing fails
+    # Data generation settings
+    if target_positive_samples is not None:
+        hyperparameters["target_positive_samples"] = target_positive_samples
+    if use_tts_positives is not None:
+        hyperparameters["use_tts_positives"] = use_tts_positives
+    if use_real_negatives is not None:
+        hyperparameters["use_real_negatives"] = use_real_negatives
+    if max_real_negatives is not None:
+        hyperparameters["max_real_negatives"] = max_real_negatives
+    if use_hard_negatives is not None:
+        hyperparameters["use_hard_negatives"] = use_hard_negatives
 
     # Create job
     job = job_manager.create_job(

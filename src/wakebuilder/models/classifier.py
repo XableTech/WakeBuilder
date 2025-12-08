@@ -1,511 +1,514 @@
 """
-Wake word classifier models for WakeBuilder.
+Wake word classifier using Audio Spectrogram Transformer (AST).
 
-This module provides neural network architectures optimized for small-footprint
-keyword spotting (KWS), designed to compete with commercial solutions like
-Picovoice Porcupine.
+This module provides a transfer learning approach using the pre-trained
+MIT/ast-finetuned-speech-commands-v2 model as a frozen feature extractor,
+with a trainable classifier head on top.
 
-Architectures:
-- TCResNet: Best for production (0.8ms latency, 261KB, 67K params)
-- BCResNet: Best for accuracy (6ms latency, 500KB, 128K params)
+Architecture:
+- Base Model: AST (MIT/ast-finetuned-speech-commands-v2) - FROZEN
+- Classifier: 2-3 layer feedforward neural network - TRAINABLE
 
-Both models support:
-- Configurable width multipliers for size/accuracy tradeoff
-- Embedding extraction for transfer learning
-- Proper residual connections for stable training
-
-Performance on Google Speech Commands V2 (12 classes):
-- BC-ResNet: 98.0% accuracy (with SE attention)
-- TC-ResNet: 96.6% accuracy
+The AST model is purpose-built for audio classification and is pre-trained
+on the Speech Commands dataset with 35 different wake words, providing an
+excellent foundation for transfer learning.
 
 References:
-- BC-ResNet: Kim et al., "Broadcasted Residual Learning for Efficient KWS"
-- TC-ResNet: Choi et al., "Temporal Convolution for Real-time KWS"
-- SE-Net: Hu et al., "Squeeze-and-Excitation Networks"
+- AST Paper: Gong et al., "AST: Audio Spectrogram Transformer"
+- Model: https://huggingface.co/MIT/ast-finetuned-speech-commands-v2
 """
 
-from typing import Optional
-
+from typing import Optional, Tuple
+from pathlib import Path
+import logging
+ 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from transformers import ASTModel, AutoFeatureExtractor
+
+logger = logging.getLogger(__name__)
+
+# Model checkpoint for AST
+AST_MODEL_CHECKPOINT = "MIT/ast-finetuned-speech-commands-v2"
 
 
-class SubSpectralNorm(nn.Module):
+class SelfAttentionPooling(nn.Module):
     """
-    Sub-spectral normalization for frequency-aware batch normalization.
-
-    Divides frequency dimension into sub-bands and normalizes each separately.
-    This helps the model learn frequency-specific patterns.
+    Self-attention pooling layer for embedding refinement.
+    
+    This helps the model focus on discriminative features in the embedding.
     """
-
-    def __init__(self, num_features: int, num_sub_bands: int = 5):
+    
+    def __init__(self, embedding_dim: int, num_heads: int = 4):
         super().__init__()
-        self.num_sub_bands = num_sub_bands
-        self.bn = nn.BatchNorm2d(num_features * num_sub_bands)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (batch, channels, time, freq)
-        batch, channels, time, freq = x.shape
-
-        # Ensure freq is divisible by num_sub_bands
-        sub_band_size = freq // self.num_sub_bands
-        if sub_band_size * self.num_sub_bands != freq:
-            # Pad if necessary
-            pad_size = self.num_sub_bands - (freq % self.num_sub_bands)
-            x = F.pad(x, (0, pad_size))
-            freq = x.shape[3]
-            sub_band_size = freq // self.num_sub_bands
-
-        # Reshape to separate sub-bands
-        x = x.view(batch, channels, time, self.num_sub_bands, sub_band_size)
-        x = x.permute(0, 1, 3, 2, 4).contiguous()
-        x = x.view(batch, channels * self.num_sub_bands, time, sub_band_size)
-
-        # Apply batch norm
-        x = self.bn(x)
-
-        # Reshape back
-        x = x.view(batch, channels, self.num_sub_bands, time, sub_band_size)
-        x = x.permute(0, 1, 3, 2, 4).contiguous()
-        x = x.view(batch, channels, time, self.num_sub_bands * sub_band_size)
-
-        return x
-
-
-class BroadcastedBlock(nn.Module):
-    """
-    Broadcasted Residual Block for BC-ResNet.
-
-    Combines 1D temporal convolution with 2D frequency convolution
-    using broadcasting to achieve both efficiency and translation equivariance.
-    """
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        stride: int = 1,
-        use_subspectral_norm: bool = True,
-    ):
-        super().__init__()
-        self.stride = stride
-
-        # Temporal convolution (1D along time axis)
-        self.temporal_conv = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=(3, 1),
-            padding=(1, 0),
-            stride=(stride, 1),
+        self.attention = nn.MultiheadAttention(
+            embed_dim=embedding_dim,
+            num_heads=num_heads,
+            dropout=0.1,
+            batch_first=True,
         )
-
-        # Frequency convolution (2D)
-        self.freq_conv = nn.Conv2d(
-            out_channels,
-            out_channels,
-            kernel_size=(1, 3),
-            padding=(0, 1),
-            groups=out_channels,
-        )
-
-        # Normalization
-        if use_subspectral_norm:
-            self.norm1 = SubSpectralNorm(out_channels)
-            self.norm2 = SubSpectralNorm(out_channels)
-        else:
-            self.norm1 = nn.BatchNorm2d(out_channels)
-            self.norm2 = nn.BatchNorm2d(out_channels)
-
-        # Activation
-        self.activation = nn.SiLU()  # Swish activation
-
-        # Skip connection
-        self.skip = nn.Identity()
-        if stride != 1 or in_channels != out_channels:
-            self.skip = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=(stride, 1)),
-                nn.BatchNorm2d(out_channels),
-            )
-
+        self.norm = nn.LayerNorm(embedding_dim)
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        identity = self.skip(x)
-
-        # Temporal path
-        out = self.temporal_conv(x)
-        out = self.norm1(out)
-        out = self.activation(out)
-
-        # Frequency path with broadcasting
-        out = self.freq_conv(out)
-        out = self.norm2(out)
-
-        # Residual connection
-        out = out + identity
-        out = self.activation(out)
-
-        return out
+        # x: (batch, embedding_dim)
+        # Add sequence dimension for attention
+        x = x.unsqueeze(1)  # (batch, 1, embedding_dim)
+        attn_out, _ = self.attention(x, x, x)
+        x = self.norm(x + attn_out)  # Residual connection
+        return x.squeeze(1)  # (batch, embedding_dim)
 
 
-class SqueezeExcitation(nn.Module):
-    """Squeeze-and-Excitation block for channel attention."""
-
-    def __init__(self, channels: int, reduction: int = 4):
-        super().__init__()
-        self.squeeze = nn.AdaptiveAvgPool2d(1)
-        self.excite = nn.Sequential(
-            nn.Linear(channels, channels // reduction, bias=False),
-            nn.ReLU(inplace=True),
-            nn.Linear(channels // reduction, channels, bias=False),
-            nn.Sigmoid(),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        b, c, _, _ = x.shape
-        y = self.squeeze(x).view(b, c)
-        y = self.excite(y).view(b, c, 1, 1)
-        return x * y
-
-
-class BCResNet(nn.Module):
+class WakeWordClassifier(nn.Module):
     """
-    Broadcasted Residual Network for Keyword Spotting.
-
-    A high-accuracy architecture that achieves SOTA performance on
-    Google Speech Commands dataset. Best choice when accuracy is
-    more important than inference speed.
-
-    Features:
-    - Broadcasted residual learning (1D temporal + 2D frequency conv)
-    - Sub-spectral normalization for frequency-aware processing
-    - Squeeze-and-Excitation attention (optional)
-    - SiLU (Swish) activation
-
-    Performance:
-    - 98.0% accuracy on Google Speech Commands V2
-    - 6ms inference on CPU
-    - 120K parameters, 468KB size
-
+    Wake word classifier head that sits on top of AST embeddings.
+    
+    This is a feedforward network with batch normalization and residual-like
+    connections that takes AST embeddings and outputs binary classification.
+    
+    Architecture:
+        Input (768) -> LayerNorm -> [Optional: SelfAttention] ->
+        Linear(256) -> GELU -> Dropout -> Linear(128) -> GELU -> Dropout -> Linear(2)
+    
+    Enhancements over basic MLP:
+    - LayerNorm on input for stable training
+    - Optional self-attention for better feature discrimination
+    - GELU activation (smoother than ReLU, better for transformers)
+    - Batch normalization between layers for faster convergence
+    
     Args:
-        num_classes: Number of output classes (2 for wake word detection)
-        n_mels: Number of mel frequency bins (default: 80)
-        base_channels: Base channel width (default: 16)
-        scale: Channel width multiplier (default: 1.0)
-        use_se: Use Squeeze-and-Excitation attention (default: True)
-        dropout: Dropout probability (default: 0.2)
+        embedding_dim: Dimension of AST embeddings (768 for AST)
+        hidden_dims: List of hidden layer dimensions
+        dropout: Dropout probability
+        num_classes: Number of output classes (2 for binary classification)
+        use_attention: Whether to use self-attention pooling
     """
-
+    
     def __init__(
         self,
+        embedding_dim: int = 768,
+        hidden_dims: Optional[list[int]] = None,
+        dropout: float = 0.3,
         num_classes: int = 2,
-        n_mels: int = 80,
-        base_channels: int = 16,
-        scale: float = 1.0,
-        use_se: bool = True,
-        dropout: float = 0.4,  # Higher default dropout for better generalization
+        use_attention: bool = False,
     ):
         super().__init__()
+        
+        if hidden_dims is None:
+            hidden_dims = [256, 128]
+        
+        self.embedding_dim = embedding_dim
+        self.hidden_dims = hidden_dims
         self.num_classes = num_classes
-        self.use_se = use_se
-
-        # Scale channels
-        def ch(c: int) -> int:
-            return max(1, int(c * scale))
-
-        self._final_channels = ch(base_channels * 8)
-
-        # Stem with larger receptive field
-        self.stem = nn.Sequential(
-            nn.Conv2d(1, ch(base_channels), kernel_size=3, padding=1),
-            nn.BatchNorm2d(ch(base_channels)),
-            nn.SiLU(),
-            nn.Dropout2d(dropout * 0.25),  # Light dropout in stem
-        )
-
-        # Stages with increasing channels and downsampling
-        self.stage1 = nn.Sequential(
-            BroadcastedBlock(ch(base_channels), ch(base_channels * 2), stride=2),
-            BroadcastedBlock(ch(base_channels * 2), ch(base_channels * 2)),
-            nn.Dropout2d(dropout * 0.5),  # Increasing dropout
-        )
-
-        self.stage2 = nn.Sequential(
-            BroadcastedBlock(ch(base_channels * 2), ch(base_channels * 4), stride=2),
-            BroadcastedBlock(ch(base_channels * 4), ch(base_channels * 4)),
-            nn.Dropout2d(dropout * 0.75),
-        )
-
-        self.stage3 = nn.Sequential(
-            BroadcastedBlock(ch(base_channels * 4), ch(base_channels * 8), stride=2),
-            BroadcastedBlock(ch(base_channels * 8), ch(base_channels * 8)),
-        )
-
-        # Squeeze-and-Excitation for channel attention
-        if use_se:
-            self.se = SqueezeExcitation(ch(base_channels * 8))
+        self.use_attention = use_attention
+        
+        # Input normalization for stable training
+        self.input_norm = nn.LayerNorm(embedding_dim)
+        
+        # Optional self-attention for better discrimination
+        if use_attention:
+            self.attention = SelfAttentionPooling(embedding_dim, num_heads=4)
         else:
-            self.se = nn.Identity()
-
-        # Global pooling and classifier with strong dropout
-        self.pool = nn.AdaptiveAvgPool2d(1)
-        self.dropout = nn.Dropout(dropout)
-        self.classifier = nn.Linear(ch(base_channels * 8), num_classes)
-
+            self.attention = None
+        
+        # Build classifier layers
+        layers = []
+        in_dim = embedding_dim
+        
+        for i, hidden_dim in enumerate(hidden_dims):
+            layers.extend([
+                nn.Linear(in_dim, hidden_dim),
+                nn.BatchNorm1d(hidden_dim),  # Batch norm for faster convergence
+                nn.GELU(),  # GELU works better with transformer embeddings
+                nn.Dropout(dropout),
+            ])
+            in_dim = hidden_dim
+        
+        # Output layer
+        layers.append(nn.Linear(in_dim, num_classes))
+        
+        self.classifier = nn.Sequential(*layers)
+        
         # Initialize weights
         self._init_weights()
-
+    
     def _init_weights(self):
+        """Initialize weights using Xavier/Glorot initialization."""
         for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.ones_(m.weight)
-                nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass.
-
-        Args:
-            x: Input mel spectrogram of shape (batch, time, freq) or (batch, 1, time, freq)
-
-        Returns:
-            Logits of shape (batch, num_classes)
-        """
-        # Add channel dimension if needed
-        if x.dim() == 3:
-            x = x.unsqueeze(1)
-
-        # Forward through network
-        x = self.stem(x)
-        x = self.stage1(x)
-        x = self.stage2(x)
-        x = self.stage3(x)
-
-        # Apply Squeeze-and-Excitation attention
-        x = self.se(x)
-
-        # Global pooling and classification
-        x = self.pool(x)
-        x = x.flatten(1)
-        x = self.dropout(x)
-        x = self.classifier(x)
-
-        return x
-
-    def get_embedding(self, x: torch.Tensor) -> torch.Tensor:
-        """Extract embeddings before the classifier (embedding_dim = final_channels)."""
-        if x.dim() == 3:
-            x = x.unsqueeze(1)
-
-        x = self.stem(x)
-        x = self.stage1(x)
-        x = self.stage2(x)
-        x = self.stage3(x)
-        x = self.se(x)
-        x = self.pool(x)
-        x = x.flatten(1)
-
-        return x
-
-    @property
-    def embedding_dim(self) -> int:
-        """Get the embedding dimension."""
-        return self._final_channels
-
-
-class TCResBlock(nn.Module):
-    """Temporal Convolutional Residual Block with proper skip connection."""
-
-    def __init__(self, in_ch: int, out_ch: int, stride: int = 2):
-        super().__init__()
-        self.conv1 = nn.Conv1d(in_ch, out_ch, kernel_size=9, padding=4, stride=stride)
-        self.bn1 = nn.BatchNorm1d(out_ch)
-        self.conv2 = nn.Conv1d(out_ch, out_ch, kernel_size=9, padding=4)
-        self.bn2 = nn.BatchNorm1d(out_ch)
-        self.activation = nn.ReLU()
-
-        # Skip connection with projection if needed
-        self.skip = nn.Identity()
-        if stride != 1 or in_ch != out_ch:
-            self.skip = nn.Sequential(
-                nn.Conv1d(in_ch, out_ch, kernel_size=1, stride=stride),
-                nn.BatchNorm1d(out_ch),
-            )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        identity = self.skip(x)
-        out = self.activation(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out = self.activation(out + identity)
-        return out
-
-
-class TCResNet(nn.Module):
-    """
-    Temporal Convolutional ResNet for Keyword Spotting.
-
-    Treats mel spectrogram frequency bins as channels and performs
-    1D temporal convolution. This is the fastest model, ideal for production.
-
-    Features:
-    - Proper residual connections (not just sequential)
-    - 0.6ms inference on CPU
-    - 64K parameters, 250KB size
-
-    Args:
-        num_classes: Number of output classes
-        n_mels: Number of mel frequency bins (becomes input channels)
-        channels: List of channel sizes for each stage
-        width_mult: Width multiplier for scaling model size
-    """
-
-    def __init__(
-        self,
-        num_classes: int = 2,
-        n_mels: int = 80,
-        channels: Optional[list[int]] = None,
-        width_mult: float = 1.0,
-    ):
-        super().__init__()
-        self.num_classes = num_classes
-
-        if channels is None:
-            channels = [16, 24, 32, 48]
-
-        # Apply width multiplier
-        channels = [max(1, int(c * width_mult)) for c in channels]
-        self._final_channels = channels[-1]
-
-        # First conv: frequency bins become channels
-        self.first_conv = nn.Conv1d(n_mels, channels[0], kernel_size=3, padding=1)
-        self.first_bn = nn.BatchNorm1d(channels[0])
-
-        # Residual blocks with proper skip connections
-        self.blocks = nn.ModuleList()
-        in_ch = channels[0]
-        for out_ch in channels[1:]:
-            self.blocks.append(TCResBlock(in_ch, out_ch, stride=2))
-            in_ch = out_ch
-
-        # Classifier
-        self.pool = nn.AdaptiveAvgPool1d(1)
-        self.dropout = nn.Dropout(0.2)
-        self.classifier = nn.Linear(channels[-1], num_classes)
-
-        self._init_weights()
-
-    def _init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv1d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
             elif isinstance(m, nn.BatchNorm1d):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
-                nn.init.zeros_(m.bias)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    
+    def forward(self, embeddings: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass.
-
+        Forward pass through the classifier.
+        
         Args:
-            x: Input of shape (batch, time, freq) - mel spectrogram
-
+            embeddings: AST embeddings of shape (batch, embedding_dim)
+            
         Returns:
             Logits of shape (batch, num_classes)
         """
-        # Transpose to (batch, freq, time) for 1D conv
-        if x.dim() == 3:
-            x = x.transpose(1, 2)
-        elif x.dim() == 4:
-            # (batch, 1, time, freq) -> (batch, freq, time)
-            x = x.squeeze(1).transpose(1, 2)
-
-        # Forward
-        x = F.relu(self.first_bn(self.first_conv(x)))
-
-        for block in self.blocks:
-            x = block(x)
-
-        x = self.pool(x).flatten(1)
-        x = self.dropout(x)
-        x = self.classifier(x)
-
-        return x
-
-    def get_embedding(self, x: torch.Tensor) -> torch.Tensor:
-        """Extract embeddings before the classifier (embedding_dim = final_channels)."""
-        if x.dim() == 3:
-            x = x.transpose(1, 2)
-        elif x.dim() == 4:
-            x = x.squeeze(1).transpose(1, 2)
-
-        x = F.relu(self.first_bn(self.first_conv(x)))
-        for block in self.blocks:
-            x = block(x)
-        x = self.pool(x).flatten(1)
-        return x
-
-    @property
-    def embedding_dim(self) -> int:
-        """Get the embedding dimension."""
-        return self._final_channels
+        # Normalize input embeddings
+        x = self.input_norm(embeddings)
+        
+        # Apply attention if enabled
+        if self.attention is not None:
+            x = self.attention(x)
+        
+        return self.classifier(x)
 
 
-def create_model(
-    model_type: str = "tc_resnet",
-    num_classes: int = 2,
-    n_mels: int = 80,
-    **kwargs,
-) -> nn.Module:
+class ASTWakeWordModel(nn.Module):
     """
-    Factory function to create a wake word detection model.
-
+    Complete wake word detection model using AST as the base.
+    
+    This model combines:
+    1. AST base model (frozen) for feature extraction
+    2. WakeWordClassifier (trainable) for binary classification
+    
+    The AST model is loaded from Hugging Face and kept frozen during training.
+    Only the classifier head is trained.
+    
     Args:
-        model_type: Type of model
-            - 'tc_resnet': Fast, production-ready (0.6ms, 250KB) [DEFAULT]
-            - 'bc_resnet': High accuracy (6ms, 468KB)
-        num_classes: Number of output classes
-        n_mels: Number of mel frequency bins
-        **kwargs: Additional model-specific arguments
-            - scale (BCResNet): Channel width multiplier
-            - width_mult (TCResNet): Width multiplier
-
-    Returns:
-        PyTorch model
+        freeze_base: Whether to freeze the AST base model (default: True)
+        classifier_hidden_dims: Hidden dimensions for classifier
+        classifier_dropout: Dropout for classifier
+        use_attention: Whether to use self-attention in classifier
     """
-    if model_type == "tc_resnet":
-        return TCResNet(num_classes=num_classes, n_mels=n_mels, **kwargs)
-    elif model_type == "bc_resnet":
-        return BCResNet(num_classes=num_classes, n_mels=n_mels, **kwargs)
-    else:
-        raise ValueError(
-            f"Unknown model type: {model_type}. "
-            f"Available: 'tc_resnet' (fast), 'bc_resnet' (accurate)"
+    
+    def __init__(
+        self,
+        freeze_base: bool = True,
+        classifier_hidden_dims: Optional[list[int]] = None,
+        classifier_dropout: float = 0.3,
+        use_attention: bool = False,
+    ):
+        super().__init__()
+        
+        self.freeze_base = freeze_base
+        
+        # Load AST base model
+        logger.info(f"Loading AST model from {AST_MODEL_CHECKPOINT}...")
+        self.base_model = ASTModel.from_pretrained(AST_MODEL_CHECKPOINT)
+        
+        # Get embedding dimension from config
+        self.embedding_dim = self.base_model.config.hidden_size  # 768
+        
+        # Freeze base model if specified
+        if freeze_base:
+            logger.info("Freezing AST base model parameters")
+            for param in self.base_model.parameters():
+                param.requires_grad = False
+            self.base_model.eval()
+        
+        # Create classifier head
+        self.classifier = WakeWordClassifier(
+            embedding_dim=self.embedding_dim,
+            hidden_dims=classifier_hidden_dims,
+            dropout=classifier_dropout,
+            num_classes=2,
+            use_attention=use_attention,
         )
+        
+        logger.info(f"Model initialized with embedding_dim={self.embedding_dim}, use_attention={use_attention}")
+    
+    def get_embeddings(self, input_values: torch.Tensor) -> torch.Tensor:
+        """
+        Extract embeddings from audio using AST.
+        
+        Args:
+            input_values: Preprocessed audio features from ASTFeatureExtractor
+                         Shape: (batch, max_length, num_mel_bins)
+            
+        Returns:
+            Pooled embeddings of shape (batch, embedding_dim)
+        """
+        # Get AST outputs
+        # Use no_grad() instead of inference_mode() to allow backprop through classifier
+        # inference_mode() creates tensors that cannot be used in autograd at all
+        if self.freeze_base:
+            with torch.no_grad():
+                outputs = self.base_model(input_values=input_values)
+            # Clone the output to detach from the no_grad context
+            embeddings = outputs.pooler_output.clone()
+        else:
+            outputs = self.base_model(input_values=input_values)
+            embeddings = outputs.pooler_output
+        
+        return embeddings
+    
+    def forward(self, input_values: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass through the complete model.
+        
+        Args:
+            input_values: Preprocessed audio features from ASTFeatureExtractor
+                         Shape: (batch, max_length, num_mel_bins)
+            
+        Returns:
+            Logits of shape (batch, 2)
+        """
+        embeddings = self.get_embeddings(input_values)
+        logits = self.classifier(embeddings)
+        return logits
+    
+    def predict_proba(self, input_values: torch.Tensor) -> torch.Tensor:
+        """
+        Get probability predictions.
+        
+        Args:
+            input_values: Preprocessed audio features
+            
+        Returns:
+            Probabilities of shape (batch, 2)
+        """
+        logits = self.forward(input_values)
+        return torch.softmax(logits, dim=-1)
+    
+    def predict(
+        self, 
+        input_values: torch.Tensor, 
+        threshold: float = 0.5
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Make predictions with threshold.
+        
+        Args:
+            input_values: Preprocessed audio features
+            threshold: Detection threshold for positive class
+            
+        Returns:
+            Tuple of (predictions, confidence_scores)
+            - predictions: Binary predictions (0 or 1)
+            - confidence_scores: Confidence for positive class
+        """
+        probs = self.predict_proba(input_values)
+        confidence = probs[:, 1]  # Probability of positive class
+        predictions = (confidence >= threshold).long()
+        return predictions, confidence
+    
+    def train(self, mode: bool = True):
+        """
+        Set training mode.
+        
+        Note: Base model stays in eval mode if frozen.
+        """
+        super().train(mode)
+        if self.freeze_base:
+            self.base_model.eval()
+        return self
 
 
-def count_parameters(model: nn.Module) -> int:
-    """Count trainable parameters in a model."""
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+class ASTFeatureExtractorWrapper:
+    """
+    Wrapper for AST feature extractor with consistent interface.
+    
+    This handles audio preprocessing for the AST model, converting
+    raw audio waveforms to mel spectrograms in the format expected by AST.
+    """
+    
+    def __init__(self, sampling_rate: int = 16000):
+        """
+        Initialize the feature extractor.
+        
+        Args:
+            sampling_rate: Expected audio sampling rate (16000 Hz for AST)
+        """
+        self.feature_extractor = AutoFeatureExtractor.from_pretrained(
+            AST_MODEL_CHECKPOINT
+        )
+        self.sampling_rate = sampling_rate
+    
+    def __call__(
+        self,
+        audio: torch.Tensor | list,
+        sampling_rate: Optional[int] = None,
+        return_tensors: str = "pt",
+    ) -> dict:
+        """
+        Process audio into AST input format.
+        
+        Args:
+            audio: Raw audio waveform(s). Can be:
+                   - torch.Tensor of shape (samples,) or (batch, samples)
+                   - List of numpy arrays or tensors
+            sampling_rate: Audio sampling rate (default: self.sampling_rate)
+            return_tensors: Return format ("pt" for PyTorch)
+            
+        Returns:
+            Dictionary with 'input_values' key containing processed features
+        """
+        if sampling_rate is None:
+            sampling_rate = self.sampling_rate
+        
+        # Convert tensor to numpy if needed
+        if isinstance(audio, torch.Tensor):
+            audio = audio.numpy()
+        
+        # Process through feature extractor
+        inputs = self.feature_extractor(
+            audio,
+            sampling_rate=sampling_rate,
+            return_tensors=return_tensors,
+        )
+        
+        return inputs
 
 
-def get_model_info(model: nn.Module) -> dict:
-    """Get model information including parameter count and architecture."""
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = count_parameters(model)
+def load_ast_model(
+    model_path: Optional[Path] = None,
+    device: str = "cpu",
+    freeze_base: bool = True,
+) -> ASTWakeWordModel:
+    """
+    Load an AST wake word model.
+    
+    Args:
+        model_path: Path to saved classifier weights (None for fresh model)
+        device: Device to load model on
+        freeze_base: Whether to freeze the base AST model
+        
+    Returns:
+        Loaded ASTWakeWordModel
+    """
+    model = ASTWakeWordModel(freeze_base=freeze_base)
+    
+    if model_path is not None and Path(model_path).exists():
+        logger.info(f"Loading classifier weights from {model_path}")
+        checkpoint = torch.load(model_path, map_location=device)
+        
+        # Load only classifier weights
+        if 'classifier_state_dict' in checkpoint:
+            model.classifier.load_state_dict(checkpoint['classifier_state_dict'])
+        elif 'model_state_dict' in checkpoint:
+            # Try to load full model state (backward compatibility)
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+    
+    model.to(device)
+    return model
 
+
+def save_wake_word_model(
+    model: ASTWakeWordModel,
+    save_path: Path,
+    wake_word: str,
+    threshold: float = 0.65,
+    metadata: Optional[dict] = None,
+) -> None:
+    """
+    Save a trained wake word model.
+    
+    Args:
+        model: Trained ASTWakeWordModel
+        save_path: Path to save the model
+        wake_word: The wake word this model detects
+        threshold: Recommended detection threshold
+        metadata: Additional metadata to save
+    """
+    import json
+    from datetime import datetime
+    
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Count parameters
+    total_params = count_parameters(model, trainable_only=False)
+    trainable_params = count_parameters(model, trainable_only=True)
+    
+    checkpoint = {
+        'classifier_state_dict': model.classifier.state_dict(),
+        'wake_word': wake_word,
+        'threshold': threshold,
+        'embedding_dim': model.embedding_dim,
+        'classifier_hidden_dims': model.classifier.hidden_dims,
+        'classifier_dropout': getattr(model.classifier, 'dropout', 0.3),
+        'use_attention': getattr(model.classifier, 'use_attention', False),
+        'sample_rate': 16000,
+        'model_version': '2.0',
+        'base_model': AST_MODEL_CHECKPOINT,
+    }
+    
+    if metadata:
+        checkpoint.update(metadata)
+    
+    torch.save(checkpoint, save_path)
+    logger.info(f"Model saved to {save_path}")
+    
+    # Also save metadata.json for the model listing API
+    metadata_path = save_path.parent / "metadata.json"
+    metadata_json = {
+        'wake_word': wake_word,
+        'threshold': threshold,
+        'model_type': 'ast',
+        'embedding_dim': model.embedding_dim,
+        'classifier_hidden_dims': model.classifier.hidden_dims,
+        'use_attention': getattr(model.classifier, 'use_attention', False),
+        'sample_rate': 16000,
+        'model_version': '2.0',
+        'base_model': AST_MODEL_CHECKPOINT,
+        'parameters': trainable_params,
+        'total_parameters': total_params,
+        'created_at': datetime.now().isoformat(),
+    }
+    
+    if metadata:
+        # Copy relevant fields to metadata.json
+        if 'metrics' in metadata:
+            metadata_json['metrics'] = metadata['metrics']
+        if 'threshold_analysis' in metadata:
+            metadata_json['threshold_analysis'] = metadata['threshold_analysis']
+        if 'training_config' in metadata:
+            metadata_json['training_config'] = metadata['training_config']
+        if 'data_stats' in metadata:
+            metadata_json['data_stats'] = metadata['data_stats']
+        if 'training_time_seconds' in metadata:
+            metadata_json['training_time_seconds'] = metadata['training_time_seconds']
+    
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata_json, f, indent=2)
+    logger.info(f"Metadata saved to {metadata_path}")
+
+
+def count_parameters(model: nn.Module, trainable_only: bool = True) -> int:
+    """
+    Count parameters in a model.
+    
+    Args:
+        model: PyTorch model
+        trainable_only: If True, count only trainable parameters
+        
+    Returns:
+        Number of parameters
+    """
+    if trainable_only:
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return sum(p.numel() for p in model.parameters())
+
+
+def get_model_info(model: ASTWakeWordModel) -> dict:
+    """
+    Get model information.
+    
+    Args:
+        model: ASTWakeWordModel instance
+        
+    Returns:
+        Dictionary with model information
+    """
+    total_params = count_parameters(model, trainable_only=False)
+    trainable_params = count_parameters(model, trainable_only=True)
+    
     return {
         "model_class": model.__class__.__name__,
+        "base_model": AST_MODEL_CHECKPOINT,
+        "embedding_dim": model.embedding_dim,
         "total_parameters": total_params,
         "trainable_parameters": trainable_params,
-        "size_mb": total_params * 4 / (1024 * 1024),  # Assuming float32
+        "frozen_parameters": total_params - trainable_params,
+        "size_mb": total_params * 4 / (1024 * 1024),
+        "trainable_size_mb": trainable_params * 4 / (1024 * 1024),
     }

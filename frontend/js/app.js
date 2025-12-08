@@ -201,7 +201,7 @@ class App {
                             <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
                             <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
                         </svg>
-                        ${model.model_type || '-'}
+                        ${model.model_type === 'ast' ? 'AST' : (model.model_type || 'AST')}
                     </span>
                     <span class="model-meta-item">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
@@ -316,7 +316,7 @@ class App {
                                     <h3>Model Info</h3>
                                     <div class="detail-row">
                                         <span>Type</span>
-                                        <span>${metadata.model_type || '-'}</span>
+                                        <span>${metadata.model_type === 'ast' ? 'AST' : (metadata.model_type || 'AST')}</span>
                                     </div>
                                     <div class="detail-row">
                                         <span>Parameters</span>
@@ -332,6 +332,68 @@ class App {
                                     </div>
                                 </div>
                             </div>
+                            ${metadata.training_config ? `
+                                <div class="detail-section">
+                                    <h3>Training Configuration</h3>
+                                    <div class="config-grid">
+                                        <div class="detail-row">
+                                            <span>Batch Size</span>
+                                            <span>${metadata.training_config.batch_size || '-'}</span>
+                                        </div>
+                                        <div class="detail-row">
+                                            <span>Learning Rate</span>
+                                            <span>${metadata.training_config.learning_rate || '-'}</span>
+                                        </div>
+                                        <div class="detail-row">
+                                            <span>Dropout</span>
+                                            <span>${metadata.training_config.dropout || '-'}</span>
+                                        </div>
+                                        <div class="detail-row">
+                                            <span>Label Smoothing</span>
+                                            <span>${metadata.training_config.label_smoothing || '-'}</span>
+                                        </div>
+                                        <div class="detail-row">
+                                            <span>Mixup Alpha</span>
+                                            <span>${metadata.training_config.mixup_alpha || '-'}</span>
+                                        </div>
+                                        <div class="detail-row">
+                                            <span>Focal Loss</span>
+                                            <span>${metadata.training_config.use_focal_loss ? 'Yes' : 'No'}</span>
+                                        </div>
+                                        <div class="detail-row">
+                                            <span>Focal Gamma</span>
+                                            <span>${metadata.training_config.use_focal_loss ? (metadata.training_config.focal_gamma || '2.0') : 'N/A'}</span>
+                                        </div>
+                                        <div class="detail-row">
+                                            <span>Self-Attention</span>
+                                            <span>${metadata.training_config.use_attention ? 'Yes' : 'No'}</span>
+                                        </div>
+                                        <div class="detail-row">
+                                            <span>Classifier Layers</span>
+                                            <span>${metadata.training_config.classifier_hidden_dims ? metadata.training_config.classifier_hidden_dims.join(', ') : '-'}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            ` : ''}
+                            ${metadata.data_stats ? `
+                                <div class="detail-section">
+                                    <h3>Training Data</h3>
+                                    <div class="config-grid">
+                                        <div class="detail-row">
+                                            <span>Positive Samples</span>
+                                            <span>${metadata.data_stats.num_positive_samples || metadata.data_stats.num_train_samples || '-'}</span>
+                                        </div>
+                                        <div class="detail-row">
+                                            <span>Negative Samples</span>
+                                            <span>${metadata.data_stats.num_negative_samples || '-'}</span>
+                                        </div>
+                                        <div class="detail-row">
+                                            <span>Training Time</span>
+                                            <span>${metadata.training_time_seconds ? formatDuration(metadata.training_time_seconds) : '-'}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            ` : ''}
                             ${metadata.threshold_analysis ? `
                                 <div class="detail-section">
                                     <h3>Threshold Analysis</h3>
@@ -422,10 +484,70 @@ class App {
 let app = null;
 
 /**
+ * Initialize tooltip system
+ */
+function initTooltips() {
+    // Create overlay element
+    const overlay = document.createElement('div');
+    overlay.className = 'tooltip-overlay';
+    document.body.appendChild(overlay);
+    
+    // Helper to close all tooltips
+    const closeAllTooltips = () => {
+        document.querySelectorAll('.tooltip-content.active').forEach(t => {
+            t.classList.remove('active');
+        });
+        overlay.classList.remove('active');
+    };
+    
+    // Handle tooltip icon clicks
+    document.querySelectorAll('.tooltip-icon').forEach(icon => {
+        icon.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const tooltipId = `tooltip-${icon.dataset.tooltip}`;
+            const tooltipContent = document.getElementById(tooltipId);
+            
+            if (tooltipContent) {
+                // Close any open tooltips
+                closeAllTooltips();
+                
+                // Show this tooltip
+                tooltipContent.classList.add('active');
+                overlay.classList.add('active');
+            }
+        });
+    });
+    
+    // Handle tooltip close button clicks
+    document.querySelectorAll('.tooltip-close').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            closeAllTooltips();
+        });
+    });
+    
+    // Close tooltip on overlay click
+    overlay.addEventListener('click', closeAllTooltips);
+    
+    // Close tooltip on escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeAllTooltips();
+        }
+    });
+}
+
+/**
  * Initialize application on DOM ready
  */
 document.addEventListener('DOMContentLoaded', () => {
     app = new App();
     app.initialize();
     window.app = app;
+    
+    // Initialize tooltips
+    initTooltips();
 });

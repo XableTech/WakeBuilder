@@ -29,7 +29,7 @@ from fastapi import (
 
 from ...audio import AudioPreprocessor
 from ...config import Config
-from ...models.classifier import create_model
+from ...models.classifier import ASTWakeWordModel, AST_MODEL_CHECKPOINT
 from ..schemas import (
     ErrorResponse,
     TestFileResponse,
@@ -43,12 +43,24 @@ class ModelLoader:
     Cached model loader for efficient inference.
 
     Keeps recently used models in memory to avoid repeated loading.
+    Supports both AST-based models (new) and legacy models.
     """
 
     def __init__(self, max_cache_size: int = 3):
-        self._cache: dict[str, tuple[torch.nn.Module, dict, float]] = {}
+        self._cache: dict[str, tuple[torch.nn.Module, dict, float, str]] = {}
         self._max_cache_size = max_cache_size
+        self._current_device = "cpu"
         self._preprocessor = AudioPreprocessor()
+        self._ast_feature_extractor = None  # Lazy loaded
+
+    def _get_ast_feature_extractor(self):
+        """Get or create AST feature extractor."""
+        if self._ast_feature_extractor is None:
+            from transformers import AutoFeatureExtractor
+            self._ast_feature_extractor = AutoFeatureExtractor.from_pretrained(
+                AST_MODEL_CHECKPOINT
+            )
+        return self._ast_feature_extractor
 
     def _find_model_path(self, model_id: str) -> Optional[Path]:
         """Find the model file path."""
@@ -80,6 +92,31 @@ class ModelLoader:
 
         return {}
 
+    def set_device(self, device: str) -> None:
+        """Set the device for inference (cpu or cuda)."""
+        if device not in ["cpu", "cuda"]:
+            device = "cpu"
+        if device == "cuda" and not torch.cuda.is_available():
+            device = "cpu"
+        
+        if device != self._current_device:
+            self._current_device = device
+            # Clear cache to reload models on new device
+            self.clear_cache()
+    
+    def get_device(self) -> str:
+        """Get current device."""
+        return self._current_device
+    
+    def get_device_info(self) -> dict:
+        """Get device availability info."""
+        cuda_available = torch.cuda.is_available()
+        return {
+            "current_device": self._current_device,
+            "cuda_available": cuda_available,
+            "cuda_device_name": torch.cuda.get_device_name(0) if cuda_available else None,
+        }
+
     def load_model(self, model_id: str) -> tuple[torch.nn.Module, dict]:
         """
         Load a model by ID, using cache if available.
@@ -89,10 +126,13 @@ class ModelLoader:
         """
         # Check cache
         if model_id in self._cache:
-            model, metadata, _ = self._cache[model_id]
-            # Update access time
-            self._cache[model_id] = (model, metadata, time.time())
-            return model, metadata
+            model, metadata, _, cached_device = self._cache[model_id]
+            if cached_device == self._current_device:
+                # Update access time
+                self._cache[model_id] = (model, metadata, time.time(), cached_device)
+                return model, metadata
+            # Device changed, need to reload
+            del self._cache[model_id]
 
         # Find model path
         model_path = self._find_model_path(model_id)
@@ -100,32 +140,40 @@ class ModelLoader:
             raise FileNotFoundError(f"Model not found: {model_id}")
 
         # Load checkpoint
-        checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
+        device = self._current_device
+        checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
-        # Create model
-        model_type = checkpoint.get("model_type", "bc_resnet")
-        n_mels = checkpoint.get("n_mels", 80)
-
-        kwargs = {}
-        if model_type == "bc_resnet":
-            kwargs["base_channels"] = checkpoint.get("base_channels", 16)
-            kwargs["scale"] = checkpoint.get("scale", 1.0)
-        elif model_type == "tc_resnet":
-            kwargs["width_mult"] = checkpoint.get("scale", 1.0)
-
-        model = create_model(
-            model_type=model_type,
-            num_classes=2,
-            n_mels=n_mels,
-            **kwargs,
+        # Check if this is an AST model (new format) or legacy model
+        is_ast_model = (
+            "classifier_state_dict" in checkpoint or 
+            checkpoint.get("base_model", "").startswith("MIT/ast")
         )
 
-        # Load weights
-        model.load_state_dict(checkpoint["model_state_dict"])
-        model.eval()
+        if is_ast_model:
+            # Load AST-based model
+            model = ASTWakeWordModel(
+                freeze_base=True,
+                classifier_hidden_dims=checkpoint.get("classifier_hidden_dims", [256, 128]),
+                classifier_dropout=checkpoint.get("classifier_dropout", 0.3),
+                use_attention=checkpoint.get("use_attention", False),
+            )
+            
+            # Load classifier weights
+            if "classifier_state_dict" in checkpoint:
+                model.classifier.load_state_dict(checkpoint["classifier_state_dict"])
+            
+            model = model.to(device)
+            model.eval()
+        else:
+            # Legacy model format - not supported in new version
+            raise ValueError(
+                f"Legacy model format not supported. Model {model_id} needs to be retrained "
+                "with the new AST-based architecture."
+            )
 
         # Load metadata
         metadata = self._load_metadata(model_id)
+        metadata["is_ast_model"] = is_ast_model
 
         # Add to cache
         if len(self._cache) >= self._max_cache_size:
@@ -133,7 +181,7 @@ class ModelLoader:
             oldest_id = min(self._cache.keys(), key=lambda k: self._cache[k][2])
             del self._cache[oldest_id]
 
-        self._cache[model_id] = (model, metadata, time.time())
+        self._cache[model_id] = (model, metadata, time.time(), device)
 
         return model, metadata
 
@@ -154,47 +202,376 @@ def get_model_loader() -> ModelLoader:
     return _model_loader
 
 
+def spectral_gate_denoise(audio: np.ndarray, sample_rate: int, threshold_db: float = -30) -> np.ndarray:
+    """
+    Apply spectral gating for noise reduction using proper STFT with overlap-add.
+    
+    This technique:
+    1. Computes the STFT of the audio with proper windowing
+    2. Estimates noise floor from quiet parts
+    3. Attenuates frequency bins below the noise threshold
+    4. Reconstructs using overlap-add
+    """
+    # STFT parameters
+    n_fft = 512
+    hop_length = 128
+    window = np.hanning(n_fft)
+    
+    # Pad audio to ensure we can process all samples
+    pad_length = n_fft - (len(audio) % hop_length)
+    audio_padded = np.pad(audio, (0, pad_length), mode='constant')
+    
+    # Compute number of frames
+    num_frames = 1 + (len(audio_padded) - n_fft) // hop_length
+    
+    # Extract frames with windowing
+    frames = np.zeros((num_frames, n_fft))
+    for i in range(num_frames):
+        start = i * hop_length
+        frames[i] = audio_padded[start:start + n_fft] * window
+    
+    # Compute FFT for each frame
+    stft = np.fft.rfft(frames, axis=1)
+    magnitude = np.abs(stft)
+    phase = np.angle(stft)
+    
+    # Estimate noise floor from the quietest 20% of frames (by total energy)
+    frame_energies = np.sum(magnitude ** 2, axis=1)
+    noise_percentile = 20
+    noise_threshold_idx = int(len(frame_energies) * noise_percentile / 100)
+    quiet_frame_indices = np.argsort(frame_energies)[:max(1, noise_threshold_idx)]
+    noise_floor = np.mean(magnitude[quiet_frame_indices], axis=0)
+    
+    # Apply soft threshold (spectral subtraction with over-subtraction factor)
+    over_subtraction = 2.0  # More aggressive noise removal
+    threshold_linear = 10 ** (threshold_db / 20)
+    noise_estimate = noise_floor * over_subtraction * threshold_linear
+    
+    # Wiener-like soft mask
+    mask = np.maximum(0, 1 - (noise_estimate / (magnitude + 1e-10)) ** 2)
+    mask = np.sqrt(mask)  # Smooth the mask
+    
+    # Apply mask and reconstruct
+    cleaned_stft = magnitude * mask * np.exp(1j * phase)
+    cleaned_frames = np.fft.irfft(cleaned_stft, n=n_fft, axis=1)
+    
+    # Overlap-add reconstruction
+    output_length = len(audio_padded)
+    output = np.zeros(output_length)
+    window_sum = np.zeros(output_length)
+    
+    for i in range(num_frames):
+        start = i * hop_length
+        output[start:start + n_fft] += cleaned_frames[i] * window
+        window_sum[start:start + n_fft] += window ** 2
+    
+    # Normalize by window sum (avoid division by zero)
+    window_sum = np.maximum(window_sum, 1e-10)
+    output = output / window_sum
+    
+    # Trim to original length
+    cleaned = output[:len(audio)]
+    
+    return cleaned.astype(np.float32)
+
+
+def compute_spectral_features(audio: np.ndarray, sample_rate: int) -> dict:
+    """
+    Compute advanced spectral features to distinguish speech from non-speech sounds.
+    
+    Key insight: Speech has MULTIPLE formant peaks and temporal variation,
+    while screams/laughs/whistles are more tonal (single peak) or impulsive.
+    """
+    n_fft = min(2048, len(audio))
+    spectrum = np.abs(np.fft.rfft(audio, n=n_fft))
+    freqs = np.fft.rfftfreq(n_fft, 1.0 / sample_rate)
+    
+    # Basic features
+    spectrum_sum = np.sum(spectrum) + 1e-10
+    centroid = np.sum(freqs * spectrum) / spectrum_sum
+    
+    # Spectral flatness
+    log_spectrum = np.log(spectrum + 1e-10)
+    geometric_mean = np.exp(np.mean(log_spectrum))
+    arithmetic_mean = np.mean(spectrum) + 1e-10
+    flatness = geometric_mean / arithmetic_mean
+    
+    # Zero crossing rate
+    zero_crossings = np.sum(np.abs(np.diff(np.sign(audio)))) / 2
+    zcr = zero_crossings / len(audio)
+    
+    # Spectral rolloff
+    cumsum = np.cumsum(spectrum ** 2)
+    rolloff_threshold = 0.85 * cumsum[-1]
+    rolloff_idx = np.searchsorted(cumsum, rolloff_threshold)
+    rolloff = freqs[min(rolloff_idx, len(freqs) - 1)]
+    
+    # Spectral bandwidth
+    bandwidth = np.sqrt(np.sum(((freqs - centroid) ** 2) * spectrum) / spectrum_sum)
+    
+    # === NEW: Spectral complexity features ===
+    
+    # 1. Count significant spectral peaks (speech has 3-5 formants)
+    # Normalize spectrum for peak detection
+    spectrum_norm = spectrum / (np.max(spectrum) + 1e-10)
+    # Find peaks above 20% of max
+    peak_threshold = 0.2
+    peaks = []
+    for i in range(1, len(spectrum_norm) - 1):
+        if (spectrum_norm[i] > spectrum_norm[i-1] and 
+            spectrum_norm[i] > spectrum_norm[i+1] and
+            spectrum_norm[i] > peak_threshold):
+            peaks.append(i)
+    num_peaks = len(peaks)
+    
+    # 2. Spectral entropy (speech has moderate entropy, pure tones have low)
+    spectrum_prob = spectrum / spectrum_sum
+    spectral_entropy = -np.sum(spectrum_prob * np.log(spectrum_prob + 1e-10))
+    max_entropy = np.log(len(spectrum))
+    normalized_entropy = spectral_entropy / max_entropy
+    
+    # 3. Peak concentration - ratio of energy in top peak vs total
+    # Pure tones have high concentration, speech has distributed energy
+    sorted_spectrum = np.sort(spectrum)[::-1]
+    top_energy = np.sum(sorted_spectrum[:10])  # Top 10 bins
+    total_energy = np.sum(spectrum) + 1e-10
+    peak_concentration = top_energy / total_energy
+    
+    # 4. Temporal variation - compute spectrum in 4 segments and measure variance
+    segment_len = len(audio) // 4
+    segment_centroids = []
+    for i in range(4):
+        seg = audio[i * segment_len:(i + 1) * segment_len]
+        seg_spec = np.abs(np.fft.rfft(seg, n=n_fft // 2))
+        seg_freqs = np.fft.rfftfreq(n_fft // 2, 1.0 / sample_rate)
+        seg_sum = np.sum(seg_spec) + 1e-10
+        seg_centroid = np.sum(seg_freqs * seg_spec) / seg_sum
+        segment_centroids.append(seg_centroid)
+    temporal_variation = np.std(segment_centroids) / (np.mean(segment_centroids) + 1e-10)
+    
+    # 5. Formant-like structure: check for energy in typical formant regions
+    # F1: 200-900 Hz, F2: 900-2500 Hz, F3: 2500-3500 Hz
+    f1_mask = (freqs >= 200) & (freqs <= 900)
+    f2_mask = (freqs >= 900) & (freqs <= 2500)
+    f3_mask = (freqs >= 2500) & (freqs <= 3500)
+    
+    f1_energy = np.sum(spectrum[f1_mask]) / total_energy if np.any(f1_mask) else 0
+    f2_energy = np.sum(spectrum[f2_mask]) / total_energy if np.any(f2_mask) else 0
+    f3_energy = np.sum(spectrum[f3_mask]) / total_energy if np.any(f3_mask) else 0
+    
+    # Speech typically has energy distributed across F1, F2, F3
+    formant_balance = min(f1_energy, f2_energy) / (max(f1_energy, f2_energy) + 1e-10)
+    
+    return {
+        "centroid": centroid,
+        "flatness": flatness,
+        "zcr": zcr,
+        "rolloff": rolloff,
+        "bandwidth": bandwidth,
+        "num_peaks": num_peaks,
+        "spectral_entropy": normalized_entropy,
+        "peak_concentration": peak_concentration,
+        "temporal_variation": temporal_variation,
+        "formant_balance": formant_balance,
+        "f1_energy": f1_energy,
+        "f2_energy": f2_energy,
+        "f3_energy": f3_energy,
+    }
+
+
+def is_speech_like(audio: np.ndarray, sample_rate: int) -> tuple[bool, float]:
+    """
+    Determine if audio has speech-like characteristics using advanced analysis.
+    
+    Key discriminators:
+    - Speech has MULTIPLE spectral peaks (formants) - screams/whistles have 1-2
+    - Speech has temporal variation in spectrum - pure tones are constant
+    - Speech has energy distributed across formant regions
+    - Speech has moderate spectral entropy - not too tonal, not noise
+    
+    Returns:
+        Tuple of (is_speech_like, speech_score)
+    """
+    features = compute_spectral_features(audio, sample_rate)
+    
+    score = 0.0
+    penalties = 0.0
+    
+    # === Primary discriminators (most important) ===
+    
+    # 1. Number of spectral peaks (CRITICAL: speech has 3+ formants)
+    num_peaks = features["num_peaks"]
+    if num_peaks >= 4:
+        score += 0.25  # Strong speech indicator
+    elif num_peaks >= 3:
+        score += 0.15
+    elif num_peaks <= 1:
+        penalties += 0.3  # Single peak = likely tonal (scream, whistle, hum)
+    
+    # 2. Peak concentration (CRITICAL: speech energy is distributed)
+    peak_conc = features["peak_concentration"]
+    if peak_conc > 0.8:
+        penalties += 0.3  # Energy too concentrated = tonal sound
+    elif peak_conc > 0.6:
+        penalties += 0.15
+    elif peak_conc < 0.4:
+        score += 0.15  # Well distributed = speech-like
+    
+    # 3. Temporal variation (speech changes over time)
+    temp_var = features["temporal_variation"]
+    if temp_var > 0.15:
+        score += 0.2  # Good temporal variation
+    elif temp_var > 0.08:
+        score += 0.1
+    elif temp_var < 0.03:
+        penalties += 0.15  # Too constant = sustained tone
+    
+    # 4. Formant balance (speech has energy in multiple formant regions)
+    formant_bal = features["formant_balance"]
+    if formant_bal > 0.3:
+        score += 0.15  # Good balance between F1 and F2
+    elif formant_bal < 0.1:
+        penalties += 0.1  # Energy too concentrated in one region
+    
+    # 5. Spectral entropy (speech has moderate complexity)
+    entropy = features["spectral_entropy"]
+    if 0.4 <= entropy <= 0.75:
+        score += 0.15  # Moderate entropy = speech-like
+    elif entropy < 0.3:
+        penalties += 0.2  # Too tonal
+    elif entropy > 0.85:
+        penalties += 0.1  # Too noisy
+    
+    # === Secondary features ===
+    
+    # Spectral flatness (speech is not too flat, not too tonal)
+    flatness = features["flatness"]
+    if 0.15 <= flatness <= 0.4:
+        score += 0.1  # Moderate flatness
+    elif flatness < 0.1:
+        penalties += 0.1  # Too tonal
+    elif flatness > 0.7:
+        penalties += 0.1  # Too noisy
+    
+    # ZCR check
+    zcr = features["zcr"]
+    if 0.03 <= zcr <= 0.12:
+        score += 0.05
+    elif zcr > 0.35:
+        penalties += 0.1  # Too high = noise
+    
+    # Compute final score
+    final_score = max(0.0, min(1.0, score - penalties))
+    
+    # Higher threshold for speech detection (0.5 instead of 0.4)
+    is_speech = final_score >= 0.5
+    
+    return is_speech, final_score
+
+
 def run_inference(
     model: torch.nn.Module,
     audio: np.ndarray,
     sample_rate: int,
     preprocessor: AudioPreprocessor,
+    feature_extractor=None,
+    is_ast_model: bool = True,
 ) -> float:
     """
     Run inference on audio data.
 
+    For AST models, we use a simplified pipeline since the AST model
+    already has strong audio understanding from pre-training.
+
     Args:
-        model: The wake word model
+        model: The wake word model (ASTWakeWordModel or legacy)
         audio: Audio data as numpy array
         sample_rate: Sample rate of the audio
-        preprocessor: Audio preprocessor
+        preprocessor: Audio preprocessor (for legacy models)
+        feature_extractor: AST feature extractor (for AST models)
+        is_ast_model: Whether this is an AST-based model
 
     Returns:
         Confidence score (0-1)
     """
-    # Check for silence/very low energy audio - return 0 confidence
+    # Quick silence check - return 0 for very quiet audio
     rms = np.sqrt(np.mean(audio ** 2))
-    if rms < 0.005:  # Very quiet audio threshold
+    if rms < 0.005:
         return 0.0
     
-    # Preprocess audio to mel spectrogram
-    spec = preprocessor.process_audio(audio, sample_rate)
+    # Normalize audio to consistent volume level
+    max_val = np.abs(audio).max()
+    if max_val > 0.01:
+        audio = audio / max_val * 0.9
 
-    # Convert to tensor
-    spec_tensor = torch.from_numpy(spec).float().unsqueeze(0)
+    # Get device from model
+    device = next(model.parameters()).device
 
-    # Run inference
-    with torch.no_grad():
-        outputs = model(spec_tensor)
-        probs = F.softmax(outputs, dim=1)
-        confidence = probs[0, 1].item()  # Probability of wake word class
-    
-    # Scale confidence by audio energy to reduce false positives on quiet audio
-    # This helps prevent high confidence on near-silence
-    energy_scale = min(1.0, rms / 0.05)  # Full confidence at RMS >= 0.05
-    confidence = confidence * (0.3 + 0.7 * energy_scale)  # Keep 30% base, scale 70%
+    if is_ast_model and feature_extractor is not None:
+        # AST model inference - simplified pipeline
+        # AST is pre-trained on speech commands, so it already handles
+        # speech vs non-speech discrimination well
+        
+        # Resample to 16kHz if needed
+        if sample_rate != 16000:
+            import librosa
+            audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
+        
+        # Process through AST feature extractor
+        inputs = feature_extractor(
+            audio,
+            sampling_rate=16000,
+            return_tensors="pt",
+        )
+        input_values = inputs["input_values"].to(device)
+
+        # Run inference
+        with torch.inference_mode():
+            outputs = model(input_values)
+            probs = F.softmax(outputs, dim=1)
+            confidence = probs[0, 1].item()
+    else:
+        # Legacy model inference (mel spectrogram based)
+        # Keep the speech detection for legacy models
+        is_speech, speech_score = is_speech_like(audio, sample_rate)
+        if not is_speech:
+            return 0.0
+        
+        spec = preprocessor.process_audio(audio, sample_rate)
+        spec_tensor = torch.from_numpy(spec).float().unsqueeze(0).to(device)
+
+        with torch.no_grad():
+            outputs = model(spec_tensor)
+            probs = F.softmax(outputs, dim=1)
+            raw_confidence = probs[0, 1].item()
+        
+        # Apply speech score modifier for legacy models
+        confidence = raw_confidence * (0.7 + 0.3 * speech_score)
 
     return confidence
+
+
+@router.get(
+    "/device",
+    summary="Get Device Info",
+    description="Get current inference device and availability info.",
+)
+async def get_device_info():
+    """Get current device info for inference."""
+    loader = get_model_loader()
+    return loader.get_device_info()
+
+
+@router.post(
+    "/device",
+    summary="Set Inference Device",
+    description="Set the device for inference (cpu or cuda).",
+)
+async def set_device(device: str = Form(..., description="Device to use: 'cpu' or 'cuda'")):
+    """Set the device for inference."""
+    loader = get_model_loader()
+    loader.set_device(device)
+    return loader.get_device_info()
 
 
 @router.post(
@@ -269,7 +646,13 @@ async def test_with_file(
 
     # Run inference
     preprocessor = AudioPreprocessor()
-    confidence = run_inference(model, audio, sr, preprocessor)
+    is_ast = metadata.get("is_ast_model", True)
+    feature_extractor = loader._get_ast_feature_extractor() if is_ast else None
+    confidence = run_inference(
+        model, audio, sr, preprocessor,
+        feature_extractor=feature_extractor,
+        is_ast_model=is_ast,
+    )
 
     # Determine detection
     detected = confidence >= threshold
@@ -324,6 +707,7 @@ async def realtime_testing(websocket: WebSocket) -> None:
     model_id = websocket.query_params.get("model_id")
     threshold_str = websocket.query_params.get("threshold")
     cooldown_str = websocket.query_params.get("cooldown_ms", "1000")
+    noise_reduction_str = websocket.query_params.get("noise_reduction", "false")
 
     if not model_id:
         await websocket.close(code=4000, reason="model_id parameter required")
@@ -347,6 +731,19 @@ async def realtime_testing(websocket: WebSocket) -> None:
         cooldown_ms = int(cooldown_str)
     except ValueError:
         cooldown_ms = 1000
+
+    # Parse noise reduction flag
+    use_noise_reduction = noise_reduction_str.lower() in ("true", "1", "yes")
+    
+    # Import noisereduce if needed
+    nr_reduce_noise = None
+    if use_noise_reduction:
+        try:
+            import noisereduce as nr
+            nr_reduce_noise = nr.reduce_noise
+        except ImportError:
+            logger.warning("noisereduce not installed, noise reduction disabled")
+            use_noise_reduction = False
 
     # Accept connection
     await websocket.accept()
@@ -377,11 +774,14 @@ async def realtime_testing(websocket: WebSocket) -> None:
             "wake_word": metadata.get("wake_word", "unknown"),
             "threshold": threshold,
             "cooldown_ms": cooldown_ms,
+            "noise_reduction": use_noise_reduction,
         }
     )
 
     # Setup
     preprocessor = AudioPreprocessor()
+    is_ast = metadata.get("is_ast_model", True)
+    feature_extractor = loader._get_ast_feature_extractor() if is_ast else None
     sample_rate = 16000
     last_detection_time = 0.0
     audio_buffer = np.array([], dtype=np.float32)
@@ -412,9 +812,25 @@ async def realtime_testing(websocket: WebSocket) -> None:
                     chunk = audio_buffer[:chunk_samples]
                     audio_buffer = audio_buffer[chunk_samples // 2 :]  # 50% overlap
 
+                    # Apply noise reduction if enabled
+                    if use_noise_reduction and nr_reduce_noise is not None:
+                        try:
+                            chunk = nr_reduce_noise(
+                                y=chunk,
+                                sr=sample_rate,
+                                stationary=True,
+                                prop_decrease=0.8,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Noise reduction failed: {e}")
+
                     # Run inference
                     start_time = time.time()
-                    confidence = run_inference(model, chunk, sample_rate, preprocessor)
+                    confidence = run_inference(
+                        model, chunk, sample_rate, preprocessor,
+                        feature_extractor=feature_extractor,
+                        is_ast_model=is_ast,
+                    )
                     inference_time = (time.time() - start_time) * 1000
 
                     # Check for detection with cooldown

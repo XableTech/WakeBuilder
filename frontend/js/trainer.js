@@ -9,7 +9,7 @@ class TrainingWizard {
     constructor() {
         this.currentStep = 1;
         this.wakeWord = '';
-        this.modelType = 'bc_resnet';
+        this.modelType = 'ast';
         this.recordings = [];
         this.jobId = null;
         this.pollInterval = null;
@@ -40,12 +40,34 @@ class TrainingWizard {
         this.elements.wakeWordInput = document.getElementById('wake-word-input');
         this.elements.wakeWordError = document.getElementById('wake-word-error');
         this.elements.modelTypeSelect = document.getElementById('model-type-select');
+        // Cache elements
+        this.elements.cacheStatusText = document.getElementById('cache-status-text');
+        this.elements.cacheChunkCount = document.getElementById('cache-chunk-count');
+        this.elements.buildCacheBtn = document.getElementById('build-cache-btn');
+        this.elements.clearCacheBtn = document.getElementById('clear-cache-btn');
+        
+        // Data generation options
+        this.elements.targetPositiveSamples = document.getElementById('target-positive-samples');
+        this.elements.maxRealNegatives = document.getElementById('max-real-negatives');
+        this.elements.useTtsPositives = document.getElementById('use-tts-positives');
+        this.elements.useRealNegatives = document.getElementById('use-real-negatives');
+        this.elements.useHardNegatives = document.getElementById('use-hard-negatives');
+        
+        // Training parameters
         this.elements.batchSize = document.getElementById('batch-size');
         this.elements.numEpochs = document.getElementById('num-epochs');
+        this.elements.earlyStopping = document.getElementById('early-stopping');
         this.elements.learningRate = document.getElementById('learning-rate');
         this.elements.dropout = document.getElementById('dropout');
-        this.elements.negativeWeight = document.getElementById('negative-weight');
-        this.elements.specAugment = document.getElementById('spec-augment');
+        this.elements.labelSmoothing = document.getElementById('label-smoothing');
+        this.elements.mixupAlpha = document.getElementById('mixup-alpha');
+        
+        // Model enhancements
+        this.elements.useFocalLoss = document.getElementById('use-focal-loss');
+        this.elements.focalGamma = document.getElementById('focal-gamma');
+        this.elements.useAttention = document.getElementById('use-attention');
+        this.elements.classifierDims = document.getElementById('classifier-dims');
+        
         this.elements.btnNextStep1 = document.getElementById('btn-next-step1');
         this.elements.btnCancelTrain = document.getElementById('btn-cancel-train');
 
@@ -66,6 +88,13 @@ class TrainingWizard {
         this.elements.hpBatchSize = document.getElementById('hp-batch-size');
         this.elements.hpLearningRate = document.getElementById('hp-learning-rate');
         this.elements.hpMaxEpochs = document.getElementById('hp-max-epochs');
+        this.elements.hpDropout = document.getElementById('hp-dropout');
+        this.elements.hpLabelSmoothing = document.getElementById('hp-label-smoothing');
+        this.elements.hpMixupAlpha = document.getElementById('hp-mixup-alpha');
+        this.elements.hpFocalLoss = document.getElementById('hp-focal-loss');
+        this.elements.hpFocalGamma = document.getElementById('hp-focal-gamma');
+        this.elements.hpAttention = document.getElementById('hp-attention');
+        this.elements.hpClassifierDims = document.getElementById('hp-classifier-dims');
         this.elements.currentEpoch = document.getElementById('current-epoch');
         this.elements.totalEpochs = document.getElementById('total-epochs');
         this.elements.metricTrainLoss = document.getElementById('metric-train-loss');
@@ -99,6 +128,18 @@ class TrainingWizard {
         this.elements.btnDownloadModel = document.getElementById('btn-download-model');
         this.elements.btnTrainAnother = document.getElementById('btn-train-another');
         this.elements.btnTestModel = document.getElementById('btn-test-model');
+        
+        // Result config elements
+        this.elements.resultModelType = document.getElementById('result-model-type');
+        this.elements.resultBatchSize = document.getElementById('result-batch-size');
+        this.elements.resultLearningRate = document.getElementById('result-learning-rate');
+        this.elements.resultDropout = document.getElementById('result-dropout');
+        this.elements.resultLabelSmoothing = document.getElementById('result-label-smoothing');
+        this.elements.resultMixupAlpha = document.getElementById('result-mixup-alpha');
+        this.elements.resultFocalLoss = document.getElementById('result-focal-loss');
+        this.elements.resultFocalGamma = document.getElementById('result-focal-gamma');
+        this.elements.resultAttention = document.getElementById('result-attention');
+        this.elements.resultClassifierDims = document.getElementById('result-classifier-dims');
     }
 
     /**
@@ -126,6 +167,35 @@ class TrainingWizard {
         this.elements.btnDownloadModel.addEventListener('click', () => this.downloadModel());
         this.elements.btnTrainAnother.addEventListener('click', () => this.reset());
         this.elements.btnTestModel.addEventListener('click', () => this.goToTest());
+        
+        // Cache events
+        if (this.elements.buildCacheBtn) {
+            this.elements.buildCacheBtn.addEventListener('click', () => this.buildCache());
+        }
+        if (this.elements.clearCacheBtn) {
+            this.elements.clearCacheBtn.addEventListener('click', () => this.clearCache());
+        }
+        
+        // Show/hide negative ratio based on max negatives value
+        if (this.elements.maxRealNegatives) {
+            this.elements.maxRealNegatives.addEventListener('input', () => this.updateNegativeRatioVisibility());
+            this.updateNegativeRatioVisibility(); // Initial state
+        }
+    }
+    
+    /**
+     * Show/hide negative ratio dropdown based on max negatives value
+     */
+    updateNegativeRatioVisibility() {
+        const maxNeg = parseInt(this.elements.maxRealNegatives?.value) || 0;
+        const ratioGroup = document.getElementById('negative-ratio-group');
+        if (ratioGroup) {
+            ratioGroup.style.opacity = maxNeg === 0 ? '1' : '0.5';
+            const select = ratioGroup.querySelector('select');
+            if (select) {
+                select.disabled = maxNeg !== 0;
+            }
+        }
     }
 
     /**
@@ -140,6 +210,9 @@ class TrainingWizard {
         // Initialize result charts
         this.resultLossChart = new TrainingChart(this.elements.resultLossChartCanvas);
         this.resultAccuracyChart = new AccuracyChart(this.elements.resultAccuracyChartCanvas);
+        
+        // Load cache info
+        this.loadCacheInfo();
         
         // Draw idle waveform
         drawIdleWaveform(this.elements.waveformCanvas);
@@ -329,7 +402,8 @@ class TrainingWizard {
     updateRecordingCount() {
         const count = this.recordings.length;
         this.elements.recordingCount.textContent = count;
-        this.elements.btnNextStep2.disabled = count < 3;
+        // AST with TTS only needs 1 recording minimum
+        this.elements.btnNextStep2.disabled = count < 1;
     }
 
     /**
@@ -337,15 +411,36 @@ class TrainingWizard {
      */
     async startTraining() {
         try {
-            // Get training options with new parameters
+            // Get training options with balanced defaults
+            // AST-optimized defaults with strong regularization to prevent false positives
+            
+            // Parse classifier dimensions
+            const classifierDimsStr = this.elements.classifierDims?.value || '256,128';
+            const classifierHiddenDims = classifierDimsStr.split(',').map(x => parseInt(x.trim()));
+            
             const options = {
                 modelType: this.modelType,
+                // Data generation settings
+                targetPositiveSamples: parseInt(this.elements.targetPositiveSamples?.value) || 4000,
+                maxRealNegatives: parseInt(this.elements.maxRealNegatives?.value) || 0,
+                negativeRatio: parseFloat(document.getElementById('negative-ratio')?.value) || 1.5,
+                hardNegativeRatio: parseFloat(document.getElementById('hard-negative-ratio')?.value) || 2.0,
+                useTtsPositives: this.elements.useTtsPositives?.checked ?? true,
+                useRealNegatives: this.elements.useRealNegatives?.checked ?? true,
+                useHardNegatives: this.elements.useHardNegatives?.checked ?? true,
+                // Training parameters
                 batchSize: parseInt(this.elements.batchSize.value) || 32,
-                numEpochs: parseInt(this.elements.numEpochs.value) || 150,
-                learningRate: parseFloat(this.elements.learningRate.value) || 0.0003,
-                dropout: parseFloat(this.elements.dropout?.value) || 0.4,
-                negativeClassWeight: parseFloat(this.elements.negativeWeight?.value) || 2.0,
-                specAugment: this.elements.specAugment?.checked ?? true,
+                numEpochs: parseInt(this.elements.numEpochs.value) || 100,
+                patience: parseInt(this.elements.earlyStopping?.value) || 8,
+                learningRate: parseFloat(this.elements.learningRate.value) || 0.0001,
+                dropout: parseFloat(this.elements.dropout?.value) || 0.5,
+                labelSmoothing: parseFloat(this.elements.labelSmoothing?.value) || 0.25,
+                mixupAlpha: parseFloat(this.elements.mixupAlpha?.value) || 0.5,
+                // Model enhancements
+                useFocalLoss: this.elements.useFocalLoss?.checked ?? true,
+                focalGamma: parseFloat(this.elements.focalGamma?.value) || 2.0,
+                useAttention: this.elements.useAttention?.checked ?? false,
+                classifierHiddenDims: classifierHiddenDims,
             };
 
             // Start training
@@ -356,10 +451,17 @@ class TrainingWizard {
             await this.goToStep(3);
 
             // Update hyperparameters display
-            this.elements.hpModelType.textContent = this.modelType;
+            this.elements.hpModelType.textContent = this.modelType === 'ast' ? 'AST' : this.modelType;
             this.elements.hpBatchSize.textContent = options.batchSize;
             this.elements.hpLearningRate.textContent = options.learningRate;
             this.elements.hpMaxEpochs.textContent = options.numEpochs;
+            this.elements.hpDropout.textContent = options.dropout;
+            this.elements.hpLabelSmoothing.textContent = options.labelSmoothing;
+            this.elements.hpMixupAlpha.textContent = options.mixupAlpha;
+            this.elements.hpFocalLoss.textContent = options.useFocalLoss ? 'Yes' : 'No';
+            this.elements.hpFocalGamma.textContent = options.useFocalLoss ? options.focalGamma : 'N/A';
+            this.elements.hpAttention.textContent = options.useAttention ? 'Yes' : 'No';
+            this.elements.hpClassifierDims.textContent = options.classifierHiddenDims.join(', ');
 
             // Clear chart
             this.trainingChart.clear();
@@ -492,7 +594,7 @@ class TrainingWizard {
                 this.elements.resultNegative.textContent = this.dataStats.num_negative_samples || '-';
             }
 
-            // Try to get model metadata for threshold info
+            // Try to get model metadata for threshold info and training config
             // Note: The model ID is typically the wake word normalized
             const modelId = this.wakeWord.toLowerCase().replace(/\s+/g, '_');
             try {
@@ -503,6 +605,22 @@ class TrainingWizard {
                 // Draw threshold chart if available
                 if (metadata.threshold_analysis) {
                     this.thresholdChart.setData(metadata.threshold_analysis, metadata.threshold);
+                }
+
+                // Show training configuration from saved metadata (actual values used)
+                if (metadata.training_config) {
+                    const cfg = metadata.training_config;
+                    this.elements.resultModelType.textContent = 'AST';
+                    this.elements.resultBatchSize.textContent = cfg.batch_size ?? '-';
+                    this.elements.resultLearningRate.textContent = cfg.learning_rate ?? '-';
+                    this.elements.resultDropout.textContent = cfg.dropout ?? '-';
+                    this.elements.resultLabelSmoothing.textContent = cfg.label_smoothing ?? '-';
+                    this.elements.resultMixupAlpha.textContent = cfg.mixup_alpha ?? '-';
+                    this.elements.resultFocalLoss.textContent = cfg.use_focal_loss ? 'Yes' : 'No';
+                    this.elements.resultFocalGamma.textContent = cfg.use_focal_loss ? (cfg.focal_gamma ?? '2.0') : 'N/A';
+                    this.elements.resultAttention.textContent = cfg.use_attention ? 'Yes' : 'No';
+                    this.elements.resultClassifierDims.textContent = cfg.classifier_hidden_dims ? 
+                        cfg.classifier_hidden_dims.join(', ') : '-';
                 }
             } catch (e) {
                 // Model metadata not available yet, use defaults
@@ -612,6 +730,110 @@ class TrainingWizard {
         this.stopPolling();
         if (this.recorder) {
             this.recorder.dispose();
+        }
+    }
+    
+    // ========================================================================
+    // Cache Management
+    // ========================================================================
+    
+    /**
+     * Load and display cache info
+     */
+    async loadCacheInfo() {
+        try {
+            const info = await api.getNegativeCacheInfo();
+            this.updateCacheDisplay(info);
+        } catch (error) {
+            console.error('Failed to load cache info:', error);
+            if (this.elements.cacheStatusText) {
+                this.elements.cacheStatusText.textContent = 'Failed to load cache info';
+            }
+        }
+    }
+    
+    /**
+     * Update cache display
+     */
+    updateCacheDisplay(info) {
+        if (!this.elements.cacheStatusText || !this.elements.cacheChunkCount) return;
+        
+        if (info.cached && info.chunk_count > 0) {
+            this.elements.cacheStatusText.textContent = `${info.source_files.toLocaleString()} source files cached`;
+            this.elements.cacheChunkCount.textContent = `${info.chunk_count.toLocaleString()} chunks ready`;
+            this.elements.cacheChunkCount.classList.remove('no-cache');
+        } else {
+            this.elements.cacheStatusText.textContent = `${info.source_files.toLocaleString()} source files available`;
+            this.elements.cacheChunkCount.textContent = 'No cache (will be slow)';
+            this.elements.cacheChunkCount.classList.add('no-cache');
+        }
+    }
+    
+    /**
+     * Build the negative data cache
+     */
+    async buildCache() {
+        if (!this.elements.buildCacheBtn) return;
+        
+        const originalText = this.elements.buildCacheBtn.textContent;
+        this.elements.buildCacheBtn.textContent = 'Building...';
+        this.elements.buildCacheBtn.disabled = true;
+        
+        try {
+            const result = await api.buildNegativeCache();
+            this.elements.cacheStatusText.textContent = 'Building cache in background...';
+            this.elements.cacheChunkCount.textContent = `~${result.estimated_chunks.toLocaleString()} chunks`;
+            
+            // Poll for completion
+            this.pollCacheStatus();
+        } catch (error) {
+            console.error('Failed to build cache:', error);
+            alert('Failed to build cache: ' + error.message);
+        } finally {
+            this.elements.buildCacheBtn.textContent = originalText;
+            this.elements.buildCacheBtn.disabled = false;
+        }
+    }
+    
+    /**
+     * Poll cache status during build
+     */
+    pollCacheStatus() {
+        let pollCount = 0;
+        const maxPolls = 120; // 10 minutes max
+        
+        const poll = async () => {
+            pollCount++;
+            if (pollCount > maxPolls) return;
+            
+            try {
+                const info = await api.getNegativeCacheInfo();
+                this.updateCacheDisplay(info);
+                
+                // Keep polling if still building (chunk count increasing)
+                if (!info.cached || info.chunk_count === 0) {
+                    setTimeout(poll, 5000);
+                }
+            } catch (error) {
+                console.error('Cache poll error:', error);
+            }
+        };
+        
+        setTimeout(poll, 5000);
+    }
+    
+    /**
+     * Clear the negative data cache
+     */
+    async clearCache() {
+        if (!confirm('Clear all cached negative data chunks?')) return;
+        
+        try {
+            await api.clearNegativeCache();
+            this.loadCacheInfo();
+        } catch (error) {
+            console.error('Failed to clear cache:', error);
+            alert('Failed to clear cache: ' + error.message);
         }
     }
 }

@@ -34,6 +34,8 @@ class JobStatus(str, Enum):
 class ModelType(str, Enum):
     """Type of wake word model architecture."""
 
+    AST = "ast"  # Audio Spectrogram Transformer (default)
+    # Legacy types for backward compatibility
     TC_RESNET = "tc_resnet"
     BC_RESNET = "bc_resnet"
 
@@ -61,8 +63,8 @@ class TrainingRequest(BaseModel):
         examples=["Hey Computer", "Phoenix"],
     )
     model_type: ModelType = Field(
-        default=ModelType.BC_RESNET,
-        description="Model architecture: tc_resnet (fast) or bc_resnet (accurate)",
+        default=ModelType.AST,
+        description="Model architecture: ast (Audio Spectrogram Transformer, recommended)",
     )
     # Audio recordings will be sent as base64 or multipart form data
     # This is handled separately in the endpoint
@@ -92,28 +94,42 @@ class TrainingHyperparameters(BaseModel):
 
     batch_size: int = Field(default=32, ge=8, le=256, description="Training batch size")
     num_epochs: int = Field(
-        default=150, ge=10, le=500, description="Maximum training epochs"
+        default=100, ge=10, le=500, description="Maximum training epochs"
     )
     learning_rate: float = Field(
-        default=3e-4, gt=0, le=0.1, description="Initial learning rate"
+        default=5e-4, gt=0, le=0.1, description="Initial learning rate"
     )
-    dropout: float = Field(default=0.4, ge=0, le=0.7, description="Dropout probability")
+    dropout: float = Field(default=0.2, ge=0, le=0.7, description="Dropout probability")
     early_stopping_patience: int = Field(
-        default=25, ge=5, le=50, description="Epochs to wait before early stopping"
+        default=15, ge=5, le=50, description="Epochs to wait before early stopping"
     )
-    # New parameters for improved training
+    # Regularization parameters - balanced for good learning
     weight_decay: float = Field(
-        default=1e-2, ge=0, le=0.5, description="L2 regularization strength"
+        default=1e-4, ge=0, le=0.5, description="L2 regularization strength"
     )
-    negative_class_weight: float = Field(
-        default=3.0, ge=1.0, le=5.0, 
-        description="Weight for negative class (higher = fewer false positives)"
+    label_smoothing: float = Field(
+        default=0.05, ge=0, le=0.3, description="Label smoothing factor (lower = more confident)"
     )
     spec_augment: bool = Field(
         default=True, description="Enable SpecAugment (time/frequency masking)"
     )
     mixup_alpha: float = Field(
-        default=0.4, ge=0, le=1.0, description="Mixup augmentation strength (0 = disabled)"
+        default=0.1, ge=0, le=1.0, description="Mixup augmentation strength (lower = preserve patterns)"
+    )
+    # Data generation settings
+    target_positive_samples: int = Field(
+        default=6000, ge=100, le=20000, 
+        description="Target number of positive samples to generate from recordings"
+    )
+    use_tts_positives: bool = Field(
+        default=True, description="Generate additional positive samples using TTS"
+    )
+    use_real_negatives: bool = Field(
+        default=True, description="Use real negative data from data/negative/ directory"
+    )
+    max_real_negatives: int = Field(
+        default=0, ge=0, le=100000,
+        description="Maximum real negative samples (0 = no limit, use all)"
     )
 
 
@@ -224,6 +240,15 @@ class ModelMetadata(BaseModel):
     )
     threshold_analysis: Optional[list[ThresholdMetrics]] = Field(
         None, description="FAR/FRR at different thresholds"
+    )
+    training_config: Optional[dict[str, Any]] = Field(
+        None, description="Training configuration used"
+    )
+    data_stats: Optional[dict[str, Any]] = Field(
+        None, description="Training data statistics"
+    )
+    training_time_seconds: Optional[float] = Field(
+        None, description="Training duration in seconds"
     )
 
 

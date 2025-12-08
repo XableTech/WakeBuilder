@@ -35,7 +35,7 @@ PHASE_DESCRIPTIONS = {
     JobStatus.PENDING: "Waiting to start...",
     JobStatus.VALIDATING: "Validating audio recordings...",
     JobStatus.AUGMENTING: "Creating voice variations...",
-    JobStatus.GENERATING_NEGATIVES: "Generating negative examples...",
+    JobStatus.GENERATING_NEGATIVES: "Generating and Loading data...",
     JobStatus.TRAINING: "Training the model...",
     JobStatus.CALIBRATING: "Calibrating detection threshold...",
     JobStatus.SAVING: "Saving trained model...",

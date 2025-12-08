@@ -101,6 +101,9 @@ def load_model_metadata(
             size_kb=size_kb,
             metrics=meta.get("metrics"),
             threshold_analysis=threshold_analysis,
+            training_config=meta.get("training_config"),
+            data_stats=meta.get("data_stats"),
+            training_time_seconds=meta.get("training_time_seconds"),
         )
 
     except (json.JSONDecodeError, KeyError, TypeError) as e:

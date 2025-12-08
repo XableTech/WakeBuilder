@@ -1,19 +1,26 @@
 """
-Training pipeline for WakeBuilder wake word models.
+Training pipeline for WakeBuilder wake word models using AST.
 
-This module provides a complete training pipeline including:
-- Data loading and batching
-- Training loop with validation
+This module provides a complete training pipeline using Audio Spectrogram
+Transformer (AST) as the base model with transfer learning. The AST base
+model is frozen and only the classifier head is trained.
+
+Architecture:
+- Base: MIT/ast-finetuned-speech-commands-v2 (frozen)
+- Classifier: 2-3 layer feedforward network (trainable)
+
+Key Features:
+- Transfer learning with frozen AST embeddings
+- Data augmentation with TTS and noise
 - Early stopping and learning rate scheduling
 - Threshold calibration for FAR/FRR optimization
-- Model checkpointing and export
-
-Designed to train models that compete with commercial solutions like Porcupine.
 """
 
 import json
+import random
 import time
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -24,51 +31,122 @@ import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
+from transformers import AutoFeatureExtractor
 
-from ..audio import AudioPreprocessor, DataAugmenter, NegativeExampleGenerator
 from ..config import Config
-from .classifier import count_parameters, create_model
+from .classifier import (
+    ASTWakeWordModel,
+    AST_MODEL_CHECKPOINT,
+    save_wake_word_model,
+    count_parameters,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for handling class imbalance and hard examples.
+    
+    Focal loss down-weights easy examples and focuses on hard negatives,
+    which is crucial for wake word detection where similar-sounding words
+    should be confidently rejected.
+    
+    FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
+    
+    Args:
+        alpha: Weighting factor for positive class (default: 0.25)
+        gamma: Focusing parameter (default: 2.0, higher = more focus on hard examples)
+        label_smoothing: Label smoothing factor (default: 0.0)
+    """
+    
+    def __init__(self, alpha: float = 0.25, gamma: float = 2.0, label_smoothing: float = 0.0):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.label_smoothing = label_smoothing
+    
+    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # Apply label smoothing
+        num_classes = inputs.size(-1)
+        if self.label_smoothing > 0:
+            targets_smooth = torch.zeros_like(inputs)
+            targets_smooth.fill_(self.label_smoothing / (num_classes - 1))
+            targets_smooth.scatter_(1, targets.unsqueeze(1), 1.0 - self.label_smoothing)
+        else:
+            targets_smooth = F.one_hot(targets, num_classes).float()
+        
+        # Compute probabilities
+        p = F.softmax(inputs, dim=-1)
+        
+        # Compute focal weight: (1 - p_t)^gamma
+        p_t = (p * targets_smooth).sum(dim=-1)  # Probability of true class
+        focal_weight = (1 - p_t) ** self.gamma
+        
+        # Compute alpha weight
+        alpha_weight = torch.where(
+            targets == 1,
+            torch.tensor(self.alpha, device=inputs.device),
+            torch.tensor(1 - self.alpha, device=inputs.device),
+        )
+        
+        # Compute cross-entropy
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        
+        # Combine
+        focal_loss = alpha_weight * focal_weight * ce_loss
+        
+        return focal_loss.mean()
 
 
 @dataclass
 class TrainingConfig:
-    """Configuration for training."""
+    """Configuration for AST-based training."""
 
-    # Model
-    model_type: str = "bc_resnet"
-    n_mels: int = 80
-    base_channels: int = 16
-    scale: float = 1.0
+    # Classifier architecture
+    classifier_hidden_dims: list[int] = field(default_factory=lambda: [256, 128])
+    classifier_dropout: float = 0.5  # Higher dropout for better generalization
+    freeze_base: bool = True  # Always freeze AST base model
 
-    # Training - conservative settings for stability
+    # Training hyperparameters
     batch_size: int = 32
-    num_epochs: int = 150  # More epochs with early stopping
-    learning_rate: float = 3e-4  # Conservative LR
-    weight_decay: float = 1e-2  # Strong regularization
-    warmup_epochs: int = 15  # Longer warmup for stability
+    num_epochs: int = 100  # More epochs with early stopping
+    learning_rate: float = 1e-4  # Lower LR for more stable training (0.0001)
+    weight_decay: float = 1e-3  # Higher weight decay for regularization
+    warmup_epochs: int = 10
 
-    # Regularization - strong to prevent overfitting on small data
-    dropout: float = 0.4  # Higher dropout
-    label_smoothing: float = 0.1  # Moderate smoothing
-    mixup_alpha: float = 0.4  # Stronger mixup
-
-    # SpecAugment parameters (time/frequency masking)
-    spec_augment: bool = True
-    time_mask_param: int = 20  # Max time mask width
-    freq_mask_param: int = 10  # Max frequency mask width
-    num_time_masks: int = 2
-    num_freq_masks: int = 2
-
-    # Class weighting - prioritize reducing false positives
-    negative_class_weight: float = 3.0  # Penalize false positives more strongly
+    # Regularization (higher values prevent overconfidence)
+    label_smoothing: float = 0.25  # Higher smoothing prevents overconfident predictions
+    mixup_alpha: float = 0.5       # More aggressive mixup
+    
+    # Focal loss for hard example mining
+    use_focal_loss: bool = True    # Use focal loss instead of cross-entropy
+    focal_alpha: float = 0.25      # Weight for positive class in focal loss
+    focal_gamma: float = 2.0       # Focusing parameter (higher = more focus on hard examples)
+    
+    # Classifier attention
+    use_attention: bool = False    # Use self-attention in classifier
 
     # Early stopping
-    patience: int = 25  # More patience
+    patience: int = 8  # 0=disabled, 1-15 epochs without improvement
     min_delta: float = 1e-4
 
-    # Data
-    val_split: float = 0.2
+    # Data settings
+    val_split: float = 0.25  # Larger validation set for better generalization estimate
     num_workers: int = 0  # Windows compatibility
+
+    # Positive sample generation
+    target_positive_samples: int = 4000  # 2000-10000 samples recommended
+    use_tts_positives: bool = True
+
+    # Negative sample settings
+    use_real_negatives: bool = True
+    max_real_negatives: int = 0  # 0 = auto-balance using ratio
+    use_hard_negatives: bool = True  # Generate phonetically similar words as negatives
+    
+    # Negative ratios (when max_real_negatives=0)
+    negative_ratio: float = 1.5  # Real negatives = positives * ratio (1-3x)
+    hard_negative_ratio: float = 2.0  # Hard negatives = positives * ratio (1-3x)
 
     # Device
     device: str = "auto"
@@ -95,109 +173,74 @@ class TrainingMetrics:
     epochs_without_improvement: int = 0
 
 
-def spec_augment(
-    spec: torch.Tensor,
-    time_mask_param: int = 20,
-    freq_mask_param: int = 10,
-    num_time_masks: int = 2,
-    num_freq_masks: int = 2,
-) -> torch.Tensor:
+class ASTDataset(Dataset):
     """
-    Apply SpecAugment to a spectrogram.
-    
-    SpecAugment masks random time and frequency bands to improve generalization.
-    Reference: Park et al., "SpecAugment: A Simple Data Augmentation Method for ASR"
-    
-    Args:
-        spec: Spectrogram tensor of shape (time, freq) or (batch, time, freq)
-        time_mask_param: Maximum width of time mask
-        freq_mask_param: Maximum width of frequency mask
-        num_time_masks: Number of time masks to apply
-        num_freq_masks: Number of frequency masks to apply
-    
-    Returns:
-        Augmented spectrogram
-    """
-    spec = spec.clone()
-    
-    # Handle different input shapes
-    if spec.dim() == 2:
-        time_dim, freq_dim = spec.shape
-    else:
-        time_dim, freq_dim = spec.shape[-2], spec.shape[-1]
-    
-    # Apply time masks
-    for _ in range(num_time_masks):
-        t = min(np.random.randint(0, time_mask_param + 1), time_dim - 1)
-        if t > 0:
-            t0 = np.random.randint(0, time_dim - t)
-            if spec.dim() == 2:
-                spec[t0:t0 + t, :] = 0
-            else:
-                spec[..., t0:t0 + t, :] = 0
-    
-    # Apply frequency masks
-    for _ in range(num_freq_masks):
-        f = min(np.random.randint(0, freq_mask_param + 1), freq_dim - 1)
-        if f > 0:
-            f0 = np.random.randint(0, freq_dim - f)
-            if spec.dim() == 2:
-                spec[:, f0:f0 + f] = 0
-            else:
-                spec[..., :, f0:f0 + f] = 0
-    
-    return spec
+    Dataset for AST-based wake word training.
 
-
-class WakeWordDataset(Dataset):
-    """
-    Dataset for wake word training.
-
-    Stores mel spectrograms and labels for efficient batch loading.
-    Supports SpecAugment for training data augmentation.
+    Stores raw audio waveforms and labels. The AST feature extractor
+    is applied during batch collation for efficiency.
     """
 
     def __init__(
         self,
-        spectrograms: list[np.ndarray],
+        audio_samples: list[np.ndarray],
         labels: list[int],
-        augment: bool = False,
-        spec_augment_config: Optional[dict] = None,
+        feature_extractor: AutoFeatureExtractor,
+        sampling_rate: int = 16000,
     ):
-        self.spectrograms = spectrograms
+        self.audio_samples = audio_samples
         self.labels = labels
-        self.augment = augment
-        self.spec_augment_config = spec_augment_config or {}
+        self.feature_extractor = feature_extractor
+        self.sampling_rate = sampling_rate
 
     def __len__(self) -> int:
-        return len(self.spectrograms)
+        return len(self.audio_samples)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
-        spec = self.spectrograms[idx]
+        audio = self.audio_samples[idx]
         label = self.labels[idx]
 
-        # Convert to tensor
-        spec_tensor = torch.from_numpy(spec).float()
-        
-        # Apply SpecAugment during training
-        if self.augment and self.spec_augment_config:
-            spec_tensor = spec_augment(
-                spec_tensor,
-                time_mask_param=self.spec_augment_config.get("time_mask_param", 20),
-                freq_mask_param=self.spec_augment_config.get("freq_mask_param", 10),
-                num_time_masks=self.spec_augment_config.get("num_time_masks", 2),
-                num_freq_masks=self.spec_augment_config.get("num_freq_masks", 2),
-            )
+        # Process audio through AST feature extractor
+        inputs = self.feature_extractor(
+            audio,
+            sampling_rate=self.sampling_rate,
+            return_tensors="pt",
+        )
 
-        return spec_tensor, label
+        # Remove batch dimension added by feature extractor
+        input_values = inputs["input_values"].squeeze(0)
+
+        return input_values, label
 
 
-class Trainer:
+def collate_fn(batch: list[tuple[torch.Tensor, int]]) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Trainer for wake word detection models.
+    Collate function for AST dataset.
+    
+    Pads input values to the same length within a batch.
+    """
+    input_values = [item[0] for item in batch]
+    labels = torch.tensor([item[1] for item in batch], dtype=torch.long)
 
-    Handles the complete training pipeline including data preparation,
-    training loop, validation, and model export.
+    # Pad to same length
+    max_len = max(iv.shape[0] for iv in input_values)
+    padded = []
+    for iv in input_values:
+        if iv.shape[0] < max_len:
+            pad_size = max_len - iv.shape[0]
+            iv = F.pad(iv, (0, 0, 0, pad_size))
+        padded.append(iv)
+
+    input_values = torch.stack(padded)
+    return input_values, labels
+
+
+class ASTTrainer:
+    """
+    Trainer for AST-based wake word detection models.
+
+    Uses transfer learning with frozen AST base model and trainable
+    classifier head.
     """
 
     def __init__(
@@ -210,15 +253,17 @@ class Trainer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.device = torch.device(self.config.device)
-        self.model: Optional[nn.Module] = None
+        self.model: Optional[ASTWakeWordModel] = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None
 
         self.metrics = TrainingMetrics()
         self.history: list[dict] = []
+        self.data_stats: dict = {}
 
-        # Preprocessor for converting audio to spectrograms
-        self.preprocessor = AudioPreprocessor(n_mels=self.config.n_mels)
+        # Load AST feature extractor
+        logger.info(f"Loading AST feature extractor from {AST_MODEL_CHECKPOINT}")
+        self.feature_extractor = AutoFeatureExtractor.from_pretrained(AST_MODEL_CHECKPOINT)
 
     def prepare_data(
         self,
@@ -226,7 +271,6 @@ class Trainer:
         negative_audio: list[tuple[np.ndarray, int]],
         wake_word: str,
         augment_positive: bool = True,
-        generate_negatives: bool = True,
     ) -> tuple[DataLoader, DataLoader]:
         """
         Prepare training and validation data loaders.
@@ -236,184 +280,287 @@ class Trainer:
             negative_audio: List of (audio, sample_rate) for negative examples
             wake_word: The wake word being trained
             augment_positive: Whether to augment positive examples
-            generate_negatives: Whether to generate synthetic negatives
 
         Returns:
             Tuple of (train_loader, val_loader)
         """
         print("Preparing training data...")
 
-        all_spectrograms: list[np.ndarray] = []
-        all_labels: list[int] = []
+        train_audio: list[np.ndarray] = []
+        train_labels: list[int] = []
+        val_audio: list[np.ndarray] = []
+        val_labels: list[int] = []
 
-        # Process positive examples
+        # =====================================================================
+        # POSITIVE SAMPLES
+        # =====================================================================
         print(f"  Processing {len(positive_audio)} positive recordings...")
-        if augment_positive:
-            augmenter = DataAugmenter(target_sample_rate=16000)
-            for audio, sr in positive_audio:
-                for sample in augmenter.augment_audio(audio, sr):
-                    spec = self.preprocessor.process_audio(sample.audio, 16000)
-                    all_spectrograms.append(spec)
-                    all_labels.append(1)
-        else:
-            for audio, sr in positive_audio:
-                spec = self.preprocessor.process_audio(audio, sr)
-                all_spectrograms.append(spec)
-                all_labels.append(1)
 
-        num_positive = len(all_spectrograms)
-        print(f"    Generated {num_positive} positive samples")
+        all_positive = []
+        for audio, sr in positive_audio:
+            # Resample if needed
+            if sr != 16000:
+                import librosa
+                audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
+            all_positive.append(audio)
 
-        # Process negative examples
-        print(f"  Processing {len(negative_audio)} negative recordings...")
+        if augment_positive and self.config.use_tts_positives:
+            # Import augmentation modules
+            try:
+                from ..audio.real_data_loader import MassivePositiveAugmenter
+                
+                augmenter = MassivePositiveAugmenter(target_sample_rate=16000)
+                # Heavy TTS for better generalization across voices
+                # User recordings are just seeds for augmentation
+                train_pos, val_pos = augmenter.generate_samples_split(
+                    positive_audio,
+                    wake_word,
+                    target_count=self.config.target_positive_samples,
+                    use_tts=True,
+                    use_noise=True,
+                    train_tts_ratio=0.85,  # 85% TTS for voice diversity
+                    val_tts_ratio=0.7,     # 70% TTS in validation (unseen voices)
+                    val_split=self.config.val_split,
+                )
+
+                for audio, _ in train_pos:
+                    train_audio.append(audio)
+                    train_labels.append(1)
+
+                for audio, _ in val_pos:
+                    val_audio.append(audio)
+                    val_labels.append(1)
+
+            except ImportError:
+                logger.warning("Augmentation modules not available, using raw samples")
+                augment_positive = False
+
+        if not augment_positive or not self.config.use_tts_positives:
+            # Simple split without augmentation
+            random.shuffle(all_positive)
+            val_size = int(len(all_positive) * self.config.val_split)
+
+            val_audio.extend(all_positive[:val_size])
+            val_labels.extend([1] * val_size)
+            train_audio.extend(all_positive[val_size:])
+            train_labels.extend([1] * (len(all_positive) - val_size))
+
+        num_train_pos = sum(1 for l in train_labels if l == 1)
+        num_val_pos = sum(1 for l in val_labels if l == 1)
+        print(f"    Positive samples: {num_train_pos} train, {num_val_pos} val")
+
+        # =====================================================================
+        # NEGATIVE SAMPLES
+        # =====================================================================
+        all_negative = []
+        hard_negatives = []  # Phonetically similar words (TTS generated)
+
+        # Process provided negative audio
         for audio, sr in negative_audio:
-            spec = self.preprocessor.process_audio(audio, sr)
-            all_spectrograms.append(spec)
-            all_labels.append(0)
+            if sr != 16000:
+                import librosa
+                audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
+            all_negative.append(audio)
 
-        # Generate synthetic negatives - MANY MORE for better real-world performance
-        # Target ratio: ~10:1 negative to positive for robust false positive rejection
-        if generate_negatives:
-            print("  Generating synthetic negatives (this may take a moment)...", flush=True)
-            neg_gen = NegativeExampleGenerator(target_sample_rate=16000)
-            print(f"    TTS available: {neg_gen.tts_available}", flush=True)
-
-            # Silence and noise - CRITICAL for preventing false positives in quiet environments
-            print("    Generating silence samples...", flush=True)
-            silence_count = 0
+        # Load real negative data if available (NO TTS, just real audio)
+        if self.config.use_real_negatives:
             try:
-                for sample in neg_gen.generate_silence(num_samples=600):
-                    spec = self.preprocessor.process_audio(sample.audio, 16000)
-                    all_spectrograms.append(spec)
-                    all_labels.append(0)
-                    silence_count += 1
-            except Exception as e:
-                print(f"      Error generating silence: {e}", flush=True)
-            print(f"      Generated {silence_count} silence samples", flush=True)
+                from ..audio.real_data_loader import RealNegativeDataLoader
 
-            print("    Generating noise samples...", flush=True)
-            noise_count = 0
+                real_neg_loader = RealNegativeDataLoader(
+                    target_sample_rate=16000,
+                    chunk_duration=1.0,
+                )
+
+                # Use configurable ratio for real negatives (when max=0)
+                num_positive = num_train_pos + num_val_pos
+                max_neg = self.config.max_real_negatives
+                if max_neg == 0:
+                    max_neg = int(num_positive * self.config.negative_ratio)
+
+                print(f"  Loading real negative data (target {max_neg} for {self.config.negative_ratio}:1 ratio)...")
+
+                # Try cache first - only real audio, no TTS negatives
+                cache_info = real_neg_loader.get_cache_info()
+                if cache_info.get("cached", False):
+                    for audio, _ in real_neg_loader.load_from_cache(max_samples=max_neg):
+                        all_negative.append(audio)
+                elif real_neg_loader.available:
+                    for audio, _ in real_neg_loader.load_samples(max_samples=max_neg):
+                        all_negative.append(audio)
+
+            except ImportError:
+                logger.warning("Real negative loader not available")
+
+        # =====================================================================
+        # HARD NEGATIVES - Phonetically similar words (critical for discrimination)
+        # This is the MOST IMPORTANT part for preventing false positives!
+        # =====================================================================
+        train_hard_negatives = []  # Separate lists for train/val
+        val_hard_negatives = []
+        
+        if self.config.use_hard_negatives:
             try:
-                for sample in neg_gen.generate_pure_noise(num_samples=400):
-                    spec = self.preprocessor.process_audio(sample.audio, 16000)
-                    all_spectrograms.append(spec)
-                    all_labels.append(0)
-                    noise_count += 1
-            except Exception as e:
-                print(f"      Error generating noise: {e}", flush=True)
-            print(f"      Generated {noise_count} noise samples", flush=True)
-
-            # TTS-based negatives (if available) - CRITICAL for reducing false positives
-            if neg_gen.tts_available:
-                # Phonetically similar words - most important for reducing false positives
-                print("    Generating phonetically similar negatives...")
-                count = 0
-                for sample in neg_gen.generate_phonetically_similar(
-                    wake_word, num_voices=5, add_noise=True
-                ):
-                    spec = self.preprocessor.process_audio(sample.audio, 16000)
-                    all_spectrograms.append(spec)
-                    all_labels.append(0)
-                    count += 1
-                    if count >= 800:  # Many similar words
+                from ..audio.negative_generator import get_phonetically_similar_words
+                from ..tts import TTSGenerator
+                
+                similar_words = get_phonetically_similar_words(wake_word)
+                print(f"  Generating hard negatives from {len(similar_words)} similar words...")
+                print(f"    Critical prefixes (MUST learn to reject): {similar_words[:5]}")
+                
+                tts = TTSGenerator(target_sample_rate=16000)
+                all_voices = list(tts.voice_names)
+                
+                # Split voices: some for train, some ONLY for validation
+                num_val_voices = max(2, len(all_voices) // 4)  # 25% for val
+                val_voices = all_voices[:num_val_voices]
+                train_voices = all_voices[num_val_voices:]
+                
+                # Use configurable ratio for hard negatives
+                # This ensures the model sees many variations of similar-sounding words
+                target_train_hard = int(num_train_pos * self.config.hard_negative_ratio)
+                target_val_hard = int(num_val_pos * self.config.hard_negative_ratio)
+                
+                print(f"    Target: {target_train_hard} train, {target_val_hard} val hard negatives ({self.config.hard_negative_ratio}x ratio)")
+                print(f"    Using {len(train_voices)} voices for train, {len(val_voices)} for val")
+                
+                # Generate samples for critical words first
+                # Pure prefixes (sa, sam, sami) are most critical - use more voices
+                # Other similar words use fewer voices
+                train_count = 0
+                val_count = 0
+                
+                for idx, word in enumerate(similar_words[:30]):  # Top 30 similar words
+                    if train_count >= target_train_hard and val_count >= target_val_hard:
                         break
-                print(f"      Generated {count} phonetically similar samples")
+                    
+                    is_critical = idx < 5  # Pure prefixes are most critical
+                    
+                    # Use more voices for critical words, fewer for others
+                    # Critical words (pure prefixes) get ALL available voices
+                    num_train_voices = min(len(train_voices), 20 if is_critical else 5)
+                    num_val_voices_use = min(len(val_voices), 10 if is_critical else 3)
+                    
+                    # Training samples
+                    for voice in train_voices[:num_train_voices]:
+                        if train_count >= target_train_hard:
+                            break
+                        try:
+                            audio, sr = tts.synthesize(word, voice_name=voice)
+                            if audio is not None and len(audio) > 0:
+                                # Resample if needed
+                                if sr != 16000:
+                                    import librosa
+                                    audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
+                                
+                                # Pad/trim to 1 second
+                                target_len = 16000
+                                if len(audio) > target_len:
+                                    audio = audio[:target_len]
+                                else:
+                                    audio = np.pad(audio, (0, target_len - len(audio)))
+                                train_hard_negatives.append(audio.astype(np.float32))
+                                train_count += 1
+                                
+                                # Critical words get pitch variations too
+                                if is_critical and train_count < target_train_hard:
+                                    try:
+                                        import librosa
+                                        for shift in [-2, 2]:
+                                            if train_count >= target_train_hard:
+                                                break
+                                            pitched = librosa.effects.pitch_shift(audio, sr=16000, n_steps=shift)
+                                            train_hard_negatives.append(pitched.astype(np.float32))
+                                            train_count += 1
+                                    except Exception:
+                                        pass
+                        except Exception as e:
+                            pass
+                    
+                    # Validation samples (unseen voices)
+                    for voice in val_voices[:num_val_voices_use]:
+                        if val_count >= target_val_hard:
+                            break
+                        try:
+                            audio, sr = tts.synthesize(word, voice_name=voice)
+                            if audio is not None and len(audio) > 0:
+                                # Resample if needed
+                                if sr != 16000:
+                                    import librosa
+                                    audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
+                                
+                                # Pad/trim to 1 second
+                                target_len = 16000
+                                if len(audio) > target_len:
+                                    audio = audio[:target_len]
+                                else:
+                                    audio = np.pad(audio, (0, target_len - len(audio)))
+                                val_hard_negatives.append(audio.astype(np.float32))
+                                val_count += 1
+                        except Exception:
+                            pass
+                
+                print(f"    Generated {len(train_hard_negatives)} train + {len(val_hard_negatives)} val hard negatives")
+                
+            except ImportError as e:
+                logger.warning(f"Hard negative generation not available: {e}")
 
-                # Random speech - general negative examples (CRITICAL for noisy environments)
-                print("    Generating random speech negatives...")
-                count = 0
-                for sample in neg_gen.generate_random_speech(
-                    num_samples=500, num_voices=5, add_noise=True
-                ):
-                    spec = self.preprocessor.process_audio(sample.audio, 16000)
-                    all_spectrograms.append(spec)
-                    all_labels.append(0)
-                    count += 1
-                    if count >= 1000:  # Many random speech samples for robust rejection
-                        break
-                print(f"      Generated {count} random speech samples")
-            else:
-                # If TTS not available, generate more noise variants
-                print("    TTS not available, generating more noise variants...")
-                for sample in neg_gen.generate_pure_noise(num_samples=800):
-                    spec = self.preprocessor.process_audio(sample.audio, 16000)
-                    all_spectrograms.append(spec)
-                    all_labels.append(0)
+        # Split regular negatives (not hard negatives)
+        random.shuffle(all_negative)
+        val_neg_size = int(len(all_negative) * self.config.val_split)
+        
+        # Add regular negatives
+        val_audio.extend(all_negative[:val_neg_size])
+        val_labels.extend([0] * val_neg_size)
+        train_audio.extend(all_negative[val_neg_size:])
+        train_labels.extend([0] * (len(all_negative) - val_neg_size))
+        
+        # Add hard negatives SEPARATELY (already split by voice)
+        # This ensures validation has hard negatives from unseen voices
+        train_audio.extend(train_hard_negatives)
+        train_labels.extend([0] * len(train_hard_negatives))
+        val_audio.extend(val_hard_negatives)
+        val_labels.extend([0] * len(val_hard_negatives))
+        
+        print(f"    Hard negatives added: {len(train_hard_negatives)} train, {len(val_hard_negatives)} val")
 
-        num_negative = len(all_spectrograms) - num_positive
-        print(f"    Total negative samples: {num_negative}")
+        num_train_neg = sum(1 for l in train_labels if l == 0)
+        num_val_neg = sum(1 for l in val_labels if l == 0)
+        print(f"    Negative samples: {num_train_neg} train, {num_val_neg} val")
 
-        # Balance classes
-        print(f"\n  Dataset: {num_positive} positive, {num_negative} negative")
-
-        # Store data stats for UI
+        # Store stats
         self.data_stats = {
             "num_recordings": len(positive_audio),
-            "num_positive_samples": num_positive,
-            "num_negative_samples": num_negative,
-            "total_samples": len(all_spectrograms),
+            "num_positive_samples": num_train_pos + num_val_pos,
+            "num_negative_samples": num_train_neg + num_val_neg,
+            "num_train_samples": len(train_audio),
+            "num_val_samples": len(val_audio),
         }
 
-        # Stratified split to ensure balanced val set
-        all_labels_arr = np.array(all_labels)
-        pos_indices = np.where(all_labels_arr == 1)[0]
-        neg_indices = np.where(all_labels_arr == 0)[0]
-        
-        np.random.shuffle(pos_indices)
-        np.random.shuffle(neg_indices)
-        
-        val_pos_size = max(int(len(pos_indices) * self.config.val_split), 10)
-        val_neg_size = max(int(len(neg_indices) * self.config.val_split), 20)
-        
-        val_indices = np.concatenate([pos_indices[:val_pos_size], neg_indices[:val_neg_size]])
-        train_indices = np.concatenate([pos_indices[val_pos_size:], neg_indices[val_neg_size:]])
-        
-        np.random.shuffle(val_indices)
-        np.random.shuffle(train_indices)
+        print(f"\n  Total: {len(train_audio)} train, {len(val_audio)} val")
 
-        train_specs = [all_spectrograms[i] for i in train_indices]
-        train_labels = [all_labels[i] for i in train_indices]
-        val_specs = [all_spectrograms[i] for i in val_indices]
-        val_labels = [all_labels[i] for i in val_indices]
-
-        self.data_stats["num_train_samples"] = len(train_specs)
-        self.data_stats["num_val_samples"] = len(val_specs)
-        
-        print(f"  Train: {len(train_specs)} (pos: {sum(train_labels)}, neg: {len(train_labels) - sum(train_labels)})")
-        print(f"  Val: {len(val_specs)} (pos: {sum(val_labels)}, neg: {len(val_labels) - sum(val_labels)})")
-
-        # SpecAugment config for training
-        spec_augment_config = None
-        if self.config.spec_augment:
-            spec_augment_config = {
-                "time_mask_param": self.config.time_mask_param,
-                "freq_mask_param": self.config.freq_mask_param,
-                "num_time_masks": self.config.num_time_masks,
-                "num_freq_masks": self.config.num_freq_masks,
-            }
-            print(f"  SpecAugment enabled: time_mask={self.config.time_mask_param}, freq_mask={self.config.freq_mask_param}")
-
-        # Create datasets with SpecAugment for training
-        train_dataset = WakeWordDataset(
-            train_specs, train_labels, augment=True, spec_augment_config=spec_augment_config
+        # Create datasets
+        train_dataset = ASTDataset(
+            train_audio,
+            train_labels,
+            self.feature_extractor,
         )
-        val_dataset = WakeWordDataset(val_specs, val_labels, augment=False)
+        val_dataset = ASTDataset(
+            val_audio,
+            val_labels,
+            self.feature_extractor,
+        )
 
-        # Weighted sampler with higher weight for negatives to reduce false positives
+        # Weighted sampler for class balance
         train_labels_arr = np.array(train_labels)
         class_counts = np.bincount(train_labels_arr)
-        # Apply negative class weight to penalize false positives more
-        class_weights = np.array([
-            self.config.negative_class_weight / class_counts[0],  # Negative class
-            1.0 / class_counts[1],  # Positive class
-        ])
+        class_weights = 1.0 / class_counts
         sample_weights = class_weights[train_labels_arr]
         sampler = WeightedRandomSampler(
             weights=sample_weights,
             num_samples=len(train_labels),
             replacement=True,
         )
-        print(f"  Class weights: negative={class_weights[0]:.4f}, positive={class_weights[1]:.4f}")
 
         # Create data loaders
         train_loader = DataLoader(
@@ -421,6 +568,7 @@ class Trainer:
             batch_size=self.config.batch_size,
             sampler=sampler,
             num_workers=self.config.num_workers,
+            collate_fn=collate_fn,
             pin_memory=True,
         )
 
@@ -429,51 +577,52 @@ class Trainer:
             batch_size=self.config.batch_size,
             shuffle=False,
             num_workers=self.config.num_workers,
+            collate_fn=collate_fn,
             pin_memory=True,
         )
 
         return train_loader, val_loader
 
-    def create_model(self) -> nn.Module:
-        """Create the model based on configuration."""
-        # Build kwargs based on model type
-        kwargs = {}
-        if self.config.model_type == "bc_resnet":
-            kwargs["base_channels"] = self.config.base_channels
-            kwargs["scale"] = self.config.scale
-        elif self.config.model_type == "tc_resnet":
-            kwargs["width_mult"] = self.config.scale
+    def create_model(self) -> ASTWakeWordModel:
+        """Create the AST wake word model."""
+        print("\nCreating AST wake word model...")
 
-        model = create_model(
-            model_type=self.config.model_type,
-            num_classes=2,
-            n_mels=self.config.n_mels,
-            **kwargs,
+        model = ASTWakeWordModel(
+            freeze_base=self.config.freeze_base,
+            classifier_hidden_dims=self.config.classifier_hidden_dims,
+            classifier_dropout=self.config.classifier_dropout,
+            use_attention=self.config.use_attention,
         )
 
-        num_params = count_parameters(model)
-        print(f"\nModel: {self.config.model_type}")
-        print(f"  Parameters: {num_params:,}")
-        print(f"  Size: {num_params * 4 / 1024:.1f} KB")
+        total_params = count_parameters(model, trainable_only=False)
+        trainable_params = count_parameters(model, trainable_only=True)
+
+        print(f"  Base model: {AST_MODEL_CHECKPOINT}")
+        print(f"  Total parameters: {total_params:,}")
+        print(f"  Trainable parameters: {trainable_params:,}")
+        print(f"  Frozen parameters: {total_params - trainable_params:,}")
+        if self.config.use_attention:
+            print(f"  Attention: Enabled")
+        if self.config.use_focal_loss:
+            print(f"  Focal Loss: gamma={self.config.focal_gamma}, alpha={self.config.focal_alpha}")
 
         return model.to(self.device)
 
-    def setup_training(self, model: nn.Module, num_batches: int) -> None:
+    def setup_training(self, model: ASTWakeWordModel, num_batches: int) -> None:
         """Setup optimizer and scheduler."""
         self.model = model
 
-        # Optimizer with weight decay
+        # Only optimize classifier parameters
         self.optimizer = AdamW(
-            model.parameters(),
+            model.classifier.parameters(),
             lr=self.config.learning_rate,
             weight_decay=self.config.weight_decay,
         )
 
-        # OneCycleLR scheduler for better convergence
-        total_steps = max(num_batches * self.config.num_epochs, 10)  # Minimum 10 steps
-        warmup_pct = min(
-            self.config.warmup_epochs / max(self.config.num_epochs, 1), 0.3
-        )
+        # OneCycleLR scheduler
+        total_steps = max(num_batches * self.config.num_epochs, 10)
+        warmup_pct = min(self.config.warmup_epochs / max(self.config.num_epochs, 1), 0.3)
+
         self.scheduler = OneCycleLR(
             self.optimizer,
             max_lr=self.config.learning_rate,
@@ -502,64 +651,57 @@ class Trainer:
 
         return mixed_x, y_a, y_b, lam
 
-    def train_epoch(
-        self,
-        train_loader: DataLoader,
-        epoch: int,
-    ) -> tuple[float, float]:
-        """Train for one epoch with class-weighted loss."""
+    def train_epoch(self, train_loader: DataLoader, epoch: int) -> tuple[float, float]:
+        """Train for one epoch."""
         self.model.train()
         total_loss = 0.0
         correct = 0
         total = 0
         
-        # Class weights for loss function - penalize false positives more
-        # Weight[0] = negative class (higher to reduce false accepts)
-        # Weight[1] = positive class
-        class_weights = torch.tensor(
-            [self.config.negative_class_weight, 1.0], 
-            device=self.device
-        )
+        # Create focal loss if enabled
+        focal_loss_fn = None
+        if self.config.use_focal_loss:
+            focal_loss_fn = FocalLoss(
+                alpha=self.config.focal_alpha,
+                gamma=self.config.focal_gamma,
+                label_smoothing=self.config.label_smoothing,
+            )
 
-        for batch_idx, (specs, labels) in enumerate(train_loader):
-            specs = specs.to(self.device)
+        for batch_idx, (input_values, labels) in enumerate(train_loader):
+            input_values = input_values.to(self.device)
             labels = labels.to(self.device)
 
             # Apply mixup with probability 0.5
             if self.config.mixup_alpha > 0 and np.random.random() > 0.5:
-                specs, labels_a, labels_b, lam = self.mixup_data(
-                    specs, labels, self.config.mixup_alpha
+                input_values, labels_a, labels_b, lam = self.mixup_data(
+                    input_values, labels, self.config.mixup_alpha
                 )
 
-                # Forward pass
-                outputs = self.model(specs)
+                outputs = self.model(input_values)
 
-                # Mixup loss with class weights
-                loss = lam * F.cross_entropy(
-                    outputs, labels_a, 
-                    weight=class_weights,
-                    label_smoothing=self.config.label_smoothing
-                ) + (1 - lam) * F.cross_entropy(
-                    outputs, labels_b, 
-                    weight=class_weights,
-                    label_smoothing=self.config.label_smoothing
-                )
+                # Use focal loss or cross-entropy
+                if focal_loss_fn is not None:
+                    loss = lam * focal_loss_fn(outputs, labels_a) + (1 - lam) * focal_loss_fn(outputs, labels_b)
+                else:
+                    loss = lam * F.cross_entropy(
+                        outputs, labels_a, label_smoothing=self.config.label_smoothing
+                    ) + (1 - lam) * F.cross_entropy(
+                        outputs, labels_b, label_smoothing=self.config.label_smoothing
+                    )
             else:
-                # Standard forward pass with class weights
-                outputs = self.model(specs)
-                loss = F.cross_entropy(
-                    outputs, labels, 
-                    weight=class_weights,
-                    label_smoothing=self.config.label_smoothing
-                )
+                outputs = self.model(input_values)
+                # Use focal loss or cross-entropy
+                if focal_loss_fn is not None:
+                    loss = focal_loss_fn(outputs, labels)
+                else:
+                    loss = F.cross_entropy(
+                        outputs, labels, label_smoothing=self.config.label_smoothing
+                    )
 
             # Backward pass
             self.optimizer.zero_grad()
             loss.backward()
-
-            # Gradient clipping for stability
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
-
+            torch.nn.utils.clip_grad_norm_(self.model.classifier.parameters(), max_norm=1.0)
             self.optimizer.step()
             self.scheduler.step()
 
@@ -583,11 +725,11 @@ class Trainer:
         all_labels = []
         all_probs = []
 
-        for specs, labels in val_loader:
-            specs = specs.to(self.device)
+        for input_values, labels in val_loader:
+            input_values = input_values.to(self.device)
             labels = labels.to(self.device)
 
-            outputs = self.model(specs)
+            outputs = self.model(input_values)
             loss = F.cross_entropy(outputs, labels)
 
             total_loss += loss.item()
@@ -606,18 +748,14 @@ class Trainer:
 
         accuracy = (all_preds == all_labels).mean()
 
-        # Precision, recall, F1 for positive class
+        # Precision, recall, F1
         tp = ((all_preds == 1) & (all_labels == 1)).sum()
         fp = ((all_preds == 1) & (all_labels == 0)).sum()
         fn = ((all_preds == 0) & (all_labels == 1)).sum()
 
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1 = (
-            2 * precision * recall / (precision + recall)
-            if (precision + recall) > 0
-            else 0.0
-        )
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
 
         return {
             "loss": total_loss / len(val_loader),
@@ -635,7 +773,7 @@ class Trainer:
         train_loader: DataLoader,
         val_loader: DataLoader,
         wake_word: str,
-    ) -> nn.Module:
+    ) -> ASTWakeWordModel:
         """
         Full training loop with early stopping.
 
@@ -648,7 +786,7 @@ class Trainer:
             Trained model
         """
         print("\n" + "=" * 60)
-        print("Starting Training")
+        print("Starting AST Transfer Learning Training")
         print("=" * 60)
 
         # Create model
@@ -681,23 +819,23 @@ class Trainer:
             self.metrics.learning_rate = self.optimizer.param_groups[0]["lr"]
 
             # Save history
-            self.history.append(
-                {
-                    "epoch": epoch,
-                    "train_loss": train_loss,
-                    "train_acc": train_acc,
-                    "val_loss": val_metrics["loss"],
-                    "val_acc": val_metrics["accuracy"],
-                    "val_f1": val_metrics["f1"],
-                    "lr": self.metrics.learning_rate,
-                }
-            )
+            self.history.append({
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train_acc": train_acc,
+                "val_loss": val_metrics["loss"],
+                "val_acc": val_metrics["accuracy"],
+                "val_f1": val_metrics["f1"],
+                "lr": self.metrics.learning_rate,
+            })
 
             # Check for improvement
             if val_metrics["loss"] < self.metrics.best_val_loss - self.config.min_delta:
                 self.metrics.best_val_loss = val_metrics["loss"]
                 self.metrics.epochs_without_improvement = 0
-                best_model_state = self.model.state_dict().copy()
+                best_model_state = {
+                    k: v.cpu().clone() for k, v in self.model.classifier.state_dict().items()
+                }
             else:
                 self.metrics.epochs_without_improvement += 1
 
@@ -719,7 +857,7 @@ class Trainer:
 
         # Restore best model
         if best_model_state is not None:
-            self.model.load_state_dict(best_model_state)
+            self.model.classifier.load_state_dict(best_model_state)
 
         total_time = time.time() - start_time
         print(f"\nTraining completed in {total_time / 60:.1f} minutes")
@@ -730,7 +868,7 @@ class Trainer:
     def save_model(
         self,
         wake_word: str,
-        threshold: float = 0.5,
+        threshold: float = 0.65,
         metadata: Optional[dict] = None,
     ) -> Path:
         """
@@ -749,42 +887,34 @@ class Trainer:
         model_dir = self.output_dir / model_name
         model_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save model weights
+        # Save model
         model_path = model_dir / "model.pt"
-        torch.save(
-            {
-                "model_state_dict": self.model.state_dict(),
-                "model_type": self.config.model_type,
-                "n_mels": self.config.n_mels,
-                "base_channels": self.config.base_channels,
-                "scale": self.config.scale,
-            },
-            model_path,
-        )
-
-        # Save metadata
-        meta = {
-            "wake_word": wake_word,
-            "threshold": threshold,
-            "model_type": self.config.model_type,
-            "parameters": count_parameters(self.model),
+        
+        save_metadata = {
             "training_config": {
                 "batch_size": self.config.batch_size,
                 "num_epochs": self.metrics.epoch + 1,
                 "learning_rate": self.config.learning_rate,
+                "classifier_hidden_dims": self.config.classifier_hidden_dims,
             },
             "metrics": {
-                "best_val_loss": self.metrics.best_val_loss,
-                "val_accuracy": self.metrics.val_acc,
-                "val_f1": self.metrics.val_f1,
+                "best_val_loss": float(self.metrics.best_val_loss),
+                "val_accuracy": float(self.metrics.val_acc),
+                "val_f1": float(self.metrics.val_f1),
             },
+            "data_stats": self.data_stats,
         }
+        
         if metadata:
-            meta.update(metadata)
+            save_metadata.update(metadata)
 
-        meta_path = model_dir / "metadata.json"
-        with open(meta_path, "w") as f:
-            json.dump(meta, f, indent=2)
+        save_wake_word_model(
+            self.model,
+            model_path,
+            wake_word,
+            threshold,
+            save_metadata,
+        )
 
         # Save training history
         history_path = model_dir / "training_history.json"
@@ -796,7 +926,7 @@ class Trainer:
 
 
 # ============================================================================
-# Threshold Calibration (Task 2.9)
+# Threshold Calibration
 # ============================================================================
 
 
@@ -814,7 +944,7 @@ class ThresholdMetrics:
 
 
 def calibrate_threshold(
-    model: nn.Module,
+    model: ASTWakeWordModel,
     val_loader: DataLoader,
     device: torch.device,
     num_thresholds: int = 100,
@@ -838,9 +968,9 @@ def calibrate_threshold(
     all_labels = []
 
     with torch.no_grad():
-        for specs, labels in val_loader:
-            specs = specs.to(device)
-            outputs = model(specs)
+        for input_values, labels in val_loader:
+            input_values = input_values.to(device)
+            outputs = model(input_values)
             probs = F.softmax(outputs, dim=1)[:, 1]
 
             all_probs.extend(probs.cpu().numpy())
@@ -856,26 +986,18 @@ def calibrate_threshold(
     for thresh in thresholds:
         predictions = (all_probs >= thresh).astype(int)
 
-        # Calculate metrics
         tp = ((predictions == 1) & (all_labels == 1)).sum()
         tn = ((predictions == 0) & (all_labels == 0)).sum()
         fp = ((predictions == 1) & (all_labels == 0)).sum()
         fn = ((predictions == 0) & (all_labels == 1)).sum()
 
-        # FAR: False positives / Total negatives
         far = fp / (fp + tn) if (fp + tn) > 0 else 0.0
-
-        # FRR: False negatives / Total positives
         frr = fn / (fn + tp) if (fn + tp) > 0 else 0.0
 
         accuracy = (tp + tn) / len(all_labels)
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1 = (
-            2 * precision * recall / (precision + recall)
-            if (precision + recall) > 0
-            else 0.0
-        )
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
 
         metrics_list.append(
             ThresholdMetrics(
@@ -889,23 +1011,18 @@ def calibrate_threshold(
             )
         )
 
-    # Find optimal threshold for wake word detection
-    # We STRONGLY prioritize low FAR (false activations are very annoying)
-    # Target: FAR < 1% with acceptable FRR < 10%
-    best_idx = len(metrics_list) // 2  # Default to 0.5
+    # Find optimal threshold (prioritize low FAR)
+    best_idx = len(metrics_list) // 2
     best_score = float("inf")
 
     for i, m in enumerate(metrics_list):
-        # Heavy penalty for FAR - we want very few false activations
-        # Score = 10*FAR + FRR, but only consider if FAR < 5%
-        if m.far > 0.05:  # Skip thresholds with too high FAR
+        if m.far > 0.05:
             continue
         score = 10 * m.far + m.frr
         if score < best_score:
             best_score = score
             best_idx = i
 
-    # If no threshold met FAR < 5%, find the one with lowest FAR
     if best_score == float("inf"):
         min_far = float("inf")
         for i, m in enumerate(metrics_list):
@@ -914,8 +1031,8 @@ def calibrate_threshold(
                 best_idx = i
 
     optimal_threshold = metrics_list[best_idx].threshold
-    
-    # Ensure threshold is at least 0.6 for safety
+
+    # Ensure minimum threshold of 0.6
     if optimal_threshold < 0.6:
         for i, m in enumerate(metrics_list):
             if m.threshold >= 0.6:
@@ -934,7 +1051,6 @@ def print_threshold_report(
     print("Threshold Calibration Report")
     print("=" * 60)
 
-    # Find metrics at optimal threshold
     optimal_metrics = None
     for m in metrics_list:
         if abs(m.threshold - optimal_threshold) < 0.01:
@@ -950,7 +1066,6 @@ def print_threshold_report(
         print(f"  Recall: {optimal_metrics.recall:.2%}")
         print(f"  F1 Score: {optimal_metrics.f1:.3f}")
 
-    # Print table of key thresholds
     print("\nThreshold Analysis:")
     print("-" * 60)
     print(f"{'Threshold':>10} {'FAR':>8} {'FRR':>8} {'Accuracy':>10} {'F1':>8}")
@@ -965,3 +1080,8 @@ def print_threshold_report(
                     f"{m.accuracy:>10.2%} {m.f1:>8.3f}"
                 )
                 break
+
+
+# Backward compatibility aliases
+Trainer = ASTTrainer
+TrainingConfig = TrainingConfig

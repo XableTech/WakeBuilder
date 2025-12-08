@@ -88,56 +88,226 @@
                         <label for="wake-word-input">Wake Word</label>
                         <input type="text" id="wake-word-input" 
                                placeholder="e.g., Hey Computer" 
-                               maxlength="30"
-                               pattern="[A-Za-z\s]+"
+                               maxlength="12"
+                               pattern="[A-Za-z]+( [A-Za-z]+)?"
                                autocomplete="off">
-                        <div class="input-hint">2-30 characters, letters and spaces only</div>
+                        <div class="input-hint">4-12 characters, 1-2 words, letters only (e.g., "jarvis" or "hey siri")</div>
                         <div class="input-error" id="wake-word-error"></div>
                     </div>
 
                     <div class="form-group">
-                        <label for="model-type-select">Model Type</label>
+                        <label for="model-type-select">Model Architecture</label>
                         <select id="model-type-select">
-                            <option value="bc_resnet">BC-ResNet (Higher Accuracy)</option>
-                            <option value="tc_resnet">TC-ResNet (Faster Inference)</option>
+                            <option value="ast" selected>AST (Audio Spectrogram Transformer)</option>
                         </select>
-                        <div class="input-hint">BC-ResNet is recommended for most use cases</div>
+                        <div class="input-hint">Uses transfer learning from MIT/ast-finetuned-speech-commands-v2</div>
                     </div>
 
                     <details class="advanced-options">
                         <summary>Advanced Options</summary>
+                        
+                        <h4 class="options-section-title">Negative Data Cache</h4>
+                        <div class="cache-info-panel" id="cache-info-panel">
+                            <div class="cache-status">
+                                <span id="cache-status-text">Loading cache info...</span>
+                                <span id="cache-chunk-count" class="cache-count"></span>
+                            </div>
+                            <div class="cache-actions">
+                                <button type="button" id="build-cache-btn" class="btn btn-secondary btn-sm">Build Cache</button>
+                                <button type="button" id="clear-cache-btn" class="btn btn-danger btn-sm">Clear</button>
+                            </div>
+                        </div>
+                        
+                        <h4 class="options-section-title">Data Generation</h4>
                         <div class="options-grid">
                             <div class="form-group">
-                                <label for="batch-size">Batch Size</label>
-                                <input type="number" id="batch-size" value="32" min="8" max="256">
+                                <label for="target-positive-samples">Target Positive Samples</label>
+                                <input type="number" id="target-positive-samples" value="4000" min="2000" max="10000" step="500">
+                                <div class="input-hint">2000-10000 samples (4000 recommended)</div>
                             </div>
                             <div class="form-group">
-                                <label for="num-epochs">Max Epochs</label>
-                                <input type="number" id="num-epochs" value="150" min="10" max="500">
+                                <label for="max-real-negatives">Max Negative Chunks</label>
+                                <input type="number" id="max-real-negatives" value="0" min="0" max="100000" step="1000">
+                                <div class="input-hint">0 = auto (uses ratio below)</div>
+                            </div>
+                            <div class="form-group" id="negative-ratio-group">
+                                <label for="negative-ratio">Negative:Positive Ratio</label>
+                                <select id="negative-ratio">
+                                    <option value="1.0">1.0x (equal)</option>
+                                    <option value="1.5" selected>1.5x (recommended)</option>
+                                    <option value="2.0">2.0x</option>
+                                    <option value="2.5">2.5x</option>
+                                    <option value="3.0">3.0x (more negatives)</option>
+                                </select>
+                                <div class="input-hint">Real negatives = positives × ratio (1-3x)</div>
                             </div>
                             <div class="form-group">
-                                <label for="learning-rate">Learning Rate</label>
-                                <input type="number" id="learning-rate" value="0.0003" min="0.0001" max="0.1" step="0.0001">
-                            </div>
-                            <div class="form-group">
-                                <label for="dropout">Dropout</label>
-                                <input type="number" id="dropout" value="0.4" min="0" max="0.7" step="0.05">
-                                <div class="input-hint">Higher = less overfitting</div>
-                            </div>
-                            <div class="form-group">
-                                <label for="negative-weight">Negative Class Weight</label>
-                                <input type="number" id="negative-weight" value="3.0" min="1.0" max="5.0" step="0.5">
-                                <div class="input-hint">Higher = fewer false positives</div>
+                                <label for="hard-negative-ratio">Hard Negative Ratio</label>
+                                <select id="hard-negative-ratio">
+                                    <option value="1.0">1.0x</option>
+                                    <option value="1.5">1.5x</option>
+                                    <option value="2.0" selected>2.0x (recommended)</option>
+                                    <option value="2.5">2.5x</option>
+                                    <option value="3.0">3.0x (aggressive)</option>
+                                </select>
+                                <div class="input-hint">Hard negatives = positives × ratio (1-3x)</div>
                             </div>
                             <div class="form-group checkbox-group">
                                 <label>
-                                    <input type="checkbox" id="spec-augment" checked>
-                                    SpecAugment (recommended)
+                                    <input type="checkbox" id="use-tts-positives" checked>
+                                    Generate TTS Positives
                                 </label>
-                                <div class="input-hint">Time/frequency masking for better generalization</div>
+                                <div class="input-hint">Use text-to-speech for more positive samples</div>
+                            </div>
+                            <div class="form-group checkbox-group">
+                                <label>
+                                    <input type="checkbox" id="use-real-negatives" checked>
+                                    Use Real Negatives
+                                </label>
+                                <div class="input-hint">Load from cache (fast) or source files</div>
+                            </div>
+                            <div class="form-group checkbox-group">
+                                <label>
+                                    <input type="checkbox" id="use-hard-negatives" checked>
+                                    Generate Hard Negatives
+                                </label>
+                                <div class="input-hint">TTS samples of similar-sounding words (critical for accuracy)</div>
+                            </div>
+                        </div>
+                        
+                        <h4 class="options-section-title">Training Parameters</h4>
+                        <div class="options-grid">
+                            <div class="form-group">
+                                <label for="batch-size">Batch Size <span class="tooltip-icon" data-tooltip="batch-size">?</span></label>
+                                <input type="number" id="batch-size" value="32" min="8" max="256">
+                                <div class="input-hint">Samples processed together (32 is balanced)</div>
+                            </div>
+                            <div class="form-group">
+                                <label for="num-epochs">Max Epochs <span class="tooltip-icon" data-tooltip="epochs">?</span></label>
+                                <input type="number" id="num-epochs" value="100" min="10" max="500">
+                                <div class="input-hint">Maximum training iterations (early stopping may halt sooner)</div>
+                            </div>
+                            <div class="form-group">
+                                <label for="early-stopping">Early Stopping Patience <span class="tooltip-icon" data-tooltip="early-stop">?</span></label>
+                                <input type="number" id="early-stopping" value="8" min="0" max="15" step="1">
+                                <div class="input-hint">0=disabled, 1-15 epochs without improvement (8 recommended)</div>
+                            </div>
+                            <div class="form-group">
+                                <label for="learning-rate">Learning Rate <span class="tooltip-icon" data-tooltip="lr">?</span></label>
+                                <input type="number" id="learning-rate" value="0.0001" min="0.000001" max="0.1" step="0.000001">
+                                <div class="input-hint">0.000001-0.1 (0.0001 recommended)</div>
+                            </div>
+                            <div class="form-group">
+                                <label for="dropout">Dropout <span class="tooltip-icon" data-tooltip="dropout">?</span></label>
+                                <input type="number" id="dropout" value="0.5" min="0" max="0.7" step="0.05">
+                                <div class="input-hint">Higher dropout prevents overfitting (0.5 recommended)</div>
+                            </div>
+                            <div class="form-group">
+                                <label for="label-smoothing">Label Smoothing <span class="tooltip-icon" data-tooltip="label-smooth">?</span></label>
+                                <input type="number" id="label-smoothing" value="0.25" min="0" max="0.4" step="0.01">
+                                <div class="input-hint">Prevents overconfident predictions (0.25 recommended)</div>
+                            </div>
+                            <div class="form-group">
+                                <label for="mixup-alpha">Mixup Alpha <span class="tooltip-icon" data-tooltip="mixup">?</span></label>
+                                <input type="number" id="mixup-alpha" value="0.5" min="0" max="1.0" step="0.1">
+                                <div class="input-hint">More aggressive mixing for robustness (0.5 recommended)</div>
+                            </div>
+                        </div>
+                        
+                        <h4 class="options-section-title">Model Enhancements</h4>
+                        <div class="options-grid">
+                            <div class="form-group checkbox-group">
+                                <label>
+                                    <input type="checkbox" id="use-focal-loss" checked>
+                                    Focal Loss <span class="tooltip-icon" data-tooltip="focal-loss">?</span>
+                                </label>
+                                <div class="input-hint">Better handling of hard examples (recommended)</div>
+                            </div>
+                            <div class="form-group">
+                                <label for="focal-gamma">Focal Gamma <span class="tooltip-icon" data-tooltip="focal-gamma">?</span></label>
+                                <input type="number" id="focal-gamma" value="2.0" min="0.5" max="5.0" step="0.5">
+                                <div class="input-hint">Higher = more focus on hard examples (2.0 recommended)</div>
+                            </div>
+                            <div class="form-group checkbox-group">
+                                <label>
+                                    <input type="checkbox" id="use-attention" checked>
+                                    Self-Attention <span class="tooltip-icon" data-tooltip="attention">?</span>
+                                </label>
+                                <div class="input-hint">Adds attention layer for better discrimination (recommended)</div>
+                            </div>
+                            <div class="form-group">
+                                <label for="classifier-dims">Classifier Layers</label>
+                                <select id="classifier-dims">
+                                    <option value="256,128">256, 128 (default)</option>
+                                    <option value="512,256">512, 256 (deeper)</option>
+                                    <option value="512,256,128">512, 256, 128 (deepest)</option>
+                                </select>
+                                <div class="input-hint">Deeper classifiers can learn finer distinctions</div>
                             </div>
                         </div>
                     </details>
+                    
+                    <!-- Technical Explanations Modal -->
+                    <div class="tooltip-content" id="tooltip-batch-size">
+                        <button class="tooltip-close">&times;</button>
+                        <h4>Batch Size</h4>
+                        <p><strong>Simple:</strong> How many audio samples the model looks at before updating itself.</p>
+                        <p><strong>Technical:</strong> Number of samples per gradient update. Larger batches provide more stable gradients but require more memory. 32 balances speed and stability.</p>
+                    </div>
+                    <div class="tooltip-content" id="tooltip-epochs">
+                        <button class="tooltip-close">&times;</button>
+                        <h4>Max Epochs</h4>
+                        <p><strong>Simple:</strong> Maximum times the classifier will review all training data.</p>
+                        <p><strong>Technical:</strong> With AST transfer learning, the base model is frozen and only the classifier head is trained. Early stopping halts training when validation loss stops improving, so 100 epochs is a safe maximum.</p>
+                    </div>
+                    <div class="tooltip-content" id="tooltip-lr">
+                        <button class="tooltip-close">&times;</button>
+                        <h4>Learning Rate</h4>
+                        <p><strong>Simple:</strong> How big of steps the model takes when learning.</p>
+                        <p><strong>Technical:</strong> A moderate learning rate (0.0005) provides stable training. OneCycleLR scheduler adjusts this dynamically with warmup and cosine annealing.</p>
+                    </div>
+                    <div class="tooltip-content" id="tooltip-dropout">
+                        <button class="tooltip-close">&times;</button>
+                        <h4>Dropout</h4>
+                        <p><strong>Simple:</strong> Randomly "turns off" parts of the classifier during training to prevent memorization.</p>
+                        <p><strong>Technical:</strong> Applied to the classifier head layers. 0.5 means 50% of neurons are dropped, which is aggressive but necessary to prevent overfitting and reduce false positives on similar-sounding words.</p>
+                    </div>
+                    <div class="tooltip-content" id="tooltip-label-smooth">
+                        <button class="tooltip-close">&times;</button>
+                        <h4>Label Smoothing</h4>
+                        <p><strong>Simple:</strong> Makes the model less overconfident in its predictions.</p>
+                        <p><strong>Technical:</strong> Converts hard labels (0/1) to soft labels (e.g., 0.125/0.875 with 0.25 smoothing). Higher smoothing prevents the model from being too confident, which helps reject similar-sounding words.</p>
+                    </div>
+                    <div class="tooltip-content" id="tooltip-mixup">
+                        <button class="tooltip-close">&times;</button>
+                        <h4>Mixup Alpha</h4>
+                        <p><strong>Simple:</strong> Blends different audio samples together to create new training examples.</p>
+                        <p><strong>Technical:</strong> Creates virtual training examples by linearly interpolating pairs of AST embeddings and their labels. Alpha controls the Beta distribution for mixing ratios.</p>
+                    </div>
+                    <div class="tooltip-content" id="tooltip-focal-loss">
+                        <button class="tooltip-close">&times;</button>
+                        <h4>Focal Loss</h4>
+                        <p><strong>Simple:</strong> Helps the model focus on difficult examples it gets wrong.</p>
+                        <p><strong>Technical:</strong> Focal loss down-weights easy examples and focuses training on hard negatives (similar-sounding words). This is crucial for wake word detection where the model must confidently reject words like "samira" when trained on "samix".</p>
+                    </div>
+                    <div class="tooltip-content" id="tooltip-focal-gamma">
+                        <button class="tooltip-close">&times;</button>
+                        <h4>Focal Gamma</h4>
+                        <p><strong>Simple:</strong> How much to focus on hard examples. Higher = more focus.</p>
+                        <p><strong>Technical:</strong> The focusing parameter in focal loss: FL(p) = -(1-p)^gamma * log(p). Gamma=0 is standard cross-entropy. Gamma=2 is recommended. Higher values (3-5) focus even more on hard examples but may cause instability.</p>
+                    </div>
+                    <div class="tooltip-content" id="tooltip-attention">
+                        <button class="tooltip-close">&times;</button>
+                        <h4>Self-Attention</h4>
+                        <p><strong>Simple:</strong> Helps the model focus on the most important parts of the audio.</p>
+                        <p><strong>Technical:</strong> Adds a multi-head self-attention layer before the classifier. This allows the model to weigh different parts of the AST embedding differently, potentially improving discrimination between similar-sounding words. Increases trainable parameters by ~2.4M.</p>
+                    </div>
+                    <div class="tooltip-content" id="tooltip-early-stop">
+                        <button class="tooltip-close">&times;</button>
+                        <h4>Early Stopping Patience</h4>
+                        <p><strong>Simple:</strong> How many epochs to wait without improvement before stopping training.</p>
+                        <p><strong>Technical:</strong> Monitors validation loss and stops training if no improvement is seen for the specified number of epochs. Set to 0 to disable. Lower values (5-8) prevent overfitting, higher values (10-15) allow more exploration.</p>
+                    </div>
 
                     <div class="wizard-actions">
                         <button class="btn btn-secondary" id="btn-cancel-train">Cancel</button>
@@ -150,7 +320,7 @@
                     <h2>Record Your Voice</h2>
                     <p class="step-description">
                         Record yourself saying "<span id="display-wake-word">your wake word</span>" 
-                        at least 3 times. Vary your tone and speed slightly.
+                        at least once. TTS will generate diverse voice samples automatically.
                     </p>
 
                     <div class="recording-container">
@@ -173,7 +343,7 @@
 
                         <div class="recording-status">
                             <span id="recording-count">0</span> / 5 recordings
-                            <span class="recording-hint">(minimum 3 required)</span>
+                            <span class="recording-hint">(minimum 1 required)</span>
                         </div>
                     </div>
 
@@ -227,11 +397,11 @@
 
                         <!-- Hyperparameters Panel -->
                         <div class="detail-panel">
-                            <h3>Hyperparameters</h3>
+                            <h3>Training Configuration</h3>
                             <div class="detail-grid" id="hyperparameters-grid">
                                 <div class="detail-item">
-                                    <span class="detail-label">Model Type</span>
-                                    <span class="detail-value" id="hp-model-type">-</span>
+                                    <span class="detail-label">Model</span>
+                                    <span class="detail-value" id="hp-model-type">AST</span>
                                 </div>
                                 <div class="detail-item">
                                     <span class="detail-label">Batch Size</span>
@@ -244,6 +414,34 @@
                                 <div class="detail-item">
                                     <span class="detail-label">Max Epochs</span>
                                     <span class="detail-value" id="hp-max-epochs">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Dropout</span>
+                                    <span class="detail-value" id="hp-dropout">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Label Smoothing</span>
+                                    <span class="detail-value" id="hp-label-smoothing">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Mixup Alpha</span>
+                                    <span class="detail-value" id="hp-mixup-alpha">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Focal Loss</span>
+                                    <span class="detail-value" id="hp-focal-loss">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Focal Gamma</span>
+                                    <span class="detail-value" id="hp-focal-gamma">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Self-Attention</span>
+                                    <span class="detail-value" id="hp-attention">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Classifier Layers</span>
+                                    <span class="detail-value" id="hp-classifier-dims">-</span>
                                 </div>
                             </div>
                         </div>
@@ -342,6 +540,53 @@
                             </div>
                         </div>
 
+                        <!-- Training Configuration Summary -->
+                        <div class="result-panel">
+                            <h3>Training Configuration</h3>
+                            <div class="detail-grid" id="result-config-grid">
+                                <div class="detail-item">
+                                    <span class="detail-label">Model</span>
+                                    <span class="detail-value" id="result-model-type">AST</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Batch Size</span>
+                                    <span class="detail-value" id="result-batch-size">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Learning Rate</span>
+                                    <span class="detail-value" id="result-learning-rate">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Dropout</span>
+                                    <span class="detail-value" id="result-dropout">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Label Smoothing</span>
+                                    <span class="detail-value" id="result-label-smoothing">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Mixup Alpha</span>
+                                    <span class="detail-value" id="result-mixup-alpha">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Focal Loss</span>
+                                    <span class="detail-value" id="result-focal-loss">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Focal Gamma</span>
+                                    <span class="detail-value" id="result-focal-gamma">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Self-Attention</span>
+                                    <span class="detail-value" id="result-attention">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Classifier Layers</span>
+                                    <span class="detail-value" id="result-classifier-dims">-</span>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Training History Charts -->
                         <div class="charts-row">
                             <div class="result-panel chart-panel">
@@ -356,11 +601,31 @@
 
                         <!-- FAR/FRR Chart -->
                         <div class="result-panel">
-                            <h3>Threshold Analysis</h3>
+                            <h3>Threshold Analysis <span class="tooltip-icon" data-tooltip="threshold">?</span></h3>
                             <canvas id="threshold-chart" width="600" height="250"></canvas>
                             <div class="chart-legend">
                                 <span class="legend-item"><span class="legend-color far"></span> FAR (False Accept)</span>
                                 <span class="legend-item"><span class="legend-color frr"></span> FRR (False Reject)</span>
+                            </div>
+                            <div class="threshold-explanation">
+                                <div class="explanation-card">
+                                    <h4>📊 Understanding This Chart</h4>
+                                    <p><strong>Simple:</strong> This chart helps you choose how sensitive your wake word should be.</p>
+                                    <ul>
+                                        <li><strong>FAR (False Accept Rate):</strong> How often the model incorrectly triggers on non-wake-word sounds. Lower is better.</li>
+                                        <li><strong>FRR (False Reject Rate):</strong> How often the model misses your actual wake word. Lower is better.</li>
+                                        <li><strong>Threshold:</strong> The confidence level required to trigger. Higher threshold = fewer false triggers but may miss some wake words.</li>
+                                    </ul>
+                                </div>
+                                <div class="explanation-card technical">
+                                    <h4>🔧 Technical Details</h4>
+                                    <p>The optimal threshold is where FAR and FRR curves intersect (Equal Error Rate). The selected threshold balances:</p>
+                                    <ul>
+                                        <li><strong>Precision:</strong> Of all detections, how many were correct?</li>
+                                        <li><strong>Recall:</strong> Of all actual wake words, how many were detected?</li>
+                                    </ul>
+                                    <p>For always-on devices, prioritize low FAR (fewer false triggers). For critical applications, prioritize low FRR (don't miss wake words).</p>
+                                </div>
                             </div>
                         </div>
 
@@ -415,6 +680,32 @@
                     </div>
                     <div class="threshold-hint">
                         Lower = more sensitive, Higher = fewer false positives (recommended: 0.7-0.9)
+                    </div>
+                </div>
+
+                <!-- Device Selection -->
+                <div class="test-panel">
+                    <h3>Inference Device</h3>
+                    <select id="device-select" class="device-select">
+                        <option value="cpu">CPU</option>
+                        <option value="cuda">GPU (not available)</option>
+                    </select>
+                    <div class="device-hint">
+                        GPU provides faster inference if available
+                    </div>
+                </div>
+
+                <!-- Audio Processing Options -->
+                <div class="test-panel">
+                    <h3>Audio Processing</h3>
+                    <div class="checkbox-group">
+                        <label>
+                            <input type="checkbox" id="noise-reduction">
+                            Enable Noise Reduction
+                        </label>
+                    </div>
+                    <div class="device-hint">
+                        Applies spectral gating to reduce background noise before detection. May help in noisy environments but adds slight latency.
                     </div>
                 </div>
 

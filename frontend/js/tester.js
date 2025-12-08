@@ -33,6 +33,8 @@ class WakeWordTester {
         this.elements.confidenceValue = document.getElementById('confidence-value');
         this.elements.btnStartTest = document.getElementById('btn-start-test');
         this.elements.detectionLog = document.getElementById('detection-log');
+        this.elements.deviceSelect = document.getElementById('device-select');
+        this.elements.noiseReduction = document.getElementById('noise-reduction');
     }
 
     /**
@@ -42,6 +44,9 @@ class WakeWordTester {
         this.elements.modelSelect.addEventListener('change', () => this.onModelChange());
         this.elements.thresholdSlider.addEventListener('input', () => this.onThresholdChange());
         this.elements.btnStartTest.addEventListener('click', () => this.toggleListening());
+        if (this.elements.deviceSelect) {
+            this.elements.deviceSelect.addEventListener('change', () => this.onDeviceChange());
+        }
     }
 
     /**
@@ -49,6 +54,55 @@ class WakeWordTester {
      */
     async initialize() {
         await this.loadModels();
+        await this.loadDeviceInfo();
+    }
+
+    /**
+     * Load device info and update UI
+     */
+    async loadDeviceInfo() {
+        try {
+            const info = await api.getDeviceInfo();
+            console.log('Device info:', info);
+            this.updateDeviceUI(info);
+        } catch (error) {
+            console.error('Failed to load device info:', error);
+        }
+    }
+
+    /**
+     * Update device UI
+     */
+    updateDeviceUI(info) {
+        const deviceSelect = this.elements.deviceSelect;
+        if (!deviceSelect) return;
+
+        // Update current selection
+        deviceSelect.value = info.current_device;
+
+        // Disable CUDA option if not available
+        const cudaOption = deviceSelect.querySelector('option[value="cuda"]');
+        if (cudaOption) {
+            cudaOption.disabled = !info.cuda_available;
+            if (info.cuda_available && info.cuda_device_name) {
+                cudaOption.textContent = `GPU (${info.cuda_device_name})`;
+            } else {
+                cudaOption.textContent = 'GPU (not available)';
+            }
+        }
+    }
+
+    /**
+     * Handle device change
+     */
+    async onDeviceChange() {
+        const device = this.elements.deviceSelect.value;
+        try {
+            const info = await api.setDevice(device);
+            this.updateDeviceUI(info);
+        } catch (error) {
+            console.error('Failed to set device:', error);
+        }
     }
 
     /**
@@ -158,10 +212,12 @@ class WakeWordTester {
             await this.audioStreamer.initialize();
 
             // Connect WebSocket
+            const noiseReduction = this.elements.noiseReduction?.checked ?? false;
             this.websocket = api.createTestWebSocket(
                 this.selectedModel.id,
                 this.threshold,
-                1000
+                1000,
+                noiseReduction
             );
 
             this.websocket.onopen = () => {

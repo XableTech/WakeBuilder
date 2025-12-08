@@ -241,6 +241,12 @@ class DataAugmenter:
                     )
 
                 aug_audio = pad_or_trim_audio(aug_audio, self.target_length)
+                
+                # Normalize to consistent level before applying gain
+                max_val = np.abs(aug_audio).max()
+                if max_val > 0.01:
+                    aug_audio = aug_audio / max_val * 0.9
+                
                 gain_db = random.uniform(-6, 6)
                 aug_audio = apply_volume_change(aug_audio, gain_db)
 

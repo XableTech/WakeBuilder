@@ -120,9 +120,23 @@ const api = {
     async startTraining(wakeWord, recordings, options = {}) {
         const formData = new FormData();
         formData.append('wake_word', wakeWord);
-        formData.append('model_type', options.modelType || 'bc_resnet');
+        formData.append('model_type', options.modelType || 'ast');
         
-        // Basic hyperparameters
+        // Data generation settings
+        if (options.targetPositiveSamples !== undefined) {
+            formData.append('target_positive_samples', options.targetPositiveSamples);
+        }
+        if (options.maxRealNegatives !== undefined) {
+            formData.append('max_real_negatives', options.maxRealNegatives);
+        }
+        if (options.useTtsPositives !== undefined) {
+            formData.append('use_tts_positives', options.useTtsPositives);
+        }
+        if (options.useRealNegatives !== undefined) {
+            formData.append('use_real_negatives', options.useRealNegatives);
+        }
+        
+        // Training hyperparameters
         if (options.batchSize) {
             formData.append('batch_size', options.batchSize);
         }
@@ -132,16 +146,28 @@ const api = {
         if (options.learningRate) {
             formData.append('learning_rate', options.learningRate);
         }
-        
-        // New hyperparameters for improved training
         if (options.dropout !== undefined) {
             formData.append('dropout', options.dropout);
         }
-        if (options.negativeClassWeight !== undefined) {
-            formData.append('negative_class_weight', options.negativeClassWeight);
+        if (options.labelSmoothing !== undefined) {
+            formData.append('label_smoothing', options.labelSmoothing);
         }
-        if (options.specAugment !== undefined) {
-            formData.append('spec_augment', options.specAugment);
+        if (options.mixupAlpha !== undefined) {
+            formData.append('mixup_alpha', options.mixupAlpha);
+        }
+        
+        // Model enhancements
+        if (options.useFocalLoss !== undefined) {
+            formData.append('use_focal_loss', options.useFocalLoss);
+        }
+        if (options.focalGamma !== undefined) {
+            formData.append('focal_gamma', options.focalGamma);
+        }
+        if (options.useAttention !== undefined) {
+            formData.append('use_attention', options.useAttention);
+        }
+        if (options.classifierHiddenDims !== undefined) {
+            formData.append('classifier_hidden_dims', JSON.stringify(options.classifierHiddenDims));
         }
         
         recordings.forEach((blob, index) => {
@@ -263,16 +289,65 @@ const api = {
      * @param {string} modelId - Model ID
      * @param {number} threshold - Detection threshold
      * @param {number} cooldownMs - Cooldown between detections
+     * @param {boolean} noiseReduction - Enable noise reduction
      * @returns {WebSocket} WebSocket connection
      */
-    createTestWebSocket(modelId, threshold = 0.5, cooldownMs = 1000) {
+    createTestWebSocket(modelId, threshold = 0.5, cooldownMs = 1000, noiseReduction = false) {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const host = window.location.host;
         const params = new URLSearchParams({
             model_id: modelId,
             threshold: threshold,
             cooldown_ms: cooldownMs,
+            noise_reduction: noiseReduction,
         });
         return new WebSocket(`${protocol}//${host}/api/test/realtime?${params}`);
+    },
+
+    /**
+     * Get device info for inference
+     * @returns {Promise<object>} Device info
+     */
+    async getDeviceInfo() {
+        return this.get('/api/test/device');
+    },
+
+    /**
+     * Set device for inference
+     * @param {string} device - Device to use ('cpu' or 'cuda')
+     * @returns {Promise<object>} Updated device info
+     */
+    async setDevice(device) {
+        const formData = new FormData();
+        formData.append('device', device);
+        return this.postForm('/api/test/device', formData);
+    },
+
+    // ========================================================================
+    // Negative Data Cache
+    // ========================================================================
+
+    /**
+     * Get negative data cache info
+     * @returns {Promise<object>} Cache info with chunk count
+     */
+    async getNegativeCacheInfo() {
+        return this.get('/api/train/negative-cache/info');
+    },
+
+    /**
+     * Build negative data cache
+     * @returns {Promise<object>} Build status
+     */
+    async buildNegativeCache() {
+        return this.post('/api/train/negative-cache/build');
+    },
+
+    /**
+     * Clear negative data cache
+     * @returns {Promise<object>} Clear status
+     */
+    async clearNegativeCache() {
+        return this.delete('/api/train/negative-cache');
     },
 };

@@ -40,9 +40,17 @@ AUGMENTATION_CONFIG: Dict[str, Any] = {
     "negative_ratio": 4,  # Ratio of negative to positive examples
 }
 
+# AST Model configuration
+AST_CONFIG: Dict[str, Any] = {
+    "model_checkpoint": "MIT/ast-finetuned-speech-commands-v2",
+    "embedding_dim": 768,  # AST hidden size
+    "freeze_base": True,  # Freeze AST base model during training
+    "max_length": 1024,  # Maximum sequence length for AST
+}
+
 # Training parameters
 TRAINING_CONFIG: Dict[str, Any] = {
-    "embedding_dim": 512,  # Base model embedding dimension
+    "embedding_dim": 768,  # AST embedding dimension
     "hidden_dims": [256, 128],  # Hidden layer dimensions for classifier
     "dropout_rate": 0.3,  # Dropout for regularization
     "learning_rate": 0.001,  # Initial learning rate
@@ -70,7 +78,7 @@ WAKEWORD_CONFIG: Dict[str, Any] = {
 
 # Recording parameters
 RECORDING_CONFIG: Dict[str, Any] = {
-    "min_recordings": 3,  # Minimum user recordings required
+    "min_recordings": 1,  # Minimum user recordings (TTS generates the rest)
     "max_recordings": 5,  # Maximum user recordings accepted
     "min_duration": 0.5,  # Minimum recording duration in seconds
     "max_duration": 3.0,  # Maximum recording duration in seconds
@@ -103,7 +111,6 @@ class Config:
     DATA_DIR = DATA_DIR
     TEMP_DIR = TEMP_DIR
     TTS_VOICES_DIR = TTS_VOICES_DIR
-    BASE_MODEL_PATH = MODELS_DIR / "base" / "model.pt"
 
     # Audio processing
     SAMPLE_RATE = AUDIO_CONFIG["sample_rate"]
@@ -115,6 +122,12 @@ class Config:
     FMAX = AUDIO_CONFIG["fmax"]
     DURATION = AUDIO_CONFIG["duration"]
     MEL_SPEC_TIME_DIM = 96  # Target time dimension for mel spectrograms
+
+    # AST Model
+    AST_MODEL_CHECKPOINT = AST_CONFIG["model_checkpoint"]
+    AST_EMBEDDING_DIM = AST_CONFIG["embedding_dim"]
+    AST_FREEZE_BASE = AST_CONFIG["freeze_base"]
+    AST_MAX_LENGTH = AST_CONFIG["max_length"]
 
     # Training
     EMBEDDING_DIM = TRAINING_CONFIG["embedding_dim"]

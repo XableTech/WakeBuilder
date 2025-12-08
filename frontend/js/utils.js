@@ -36,6 +36,25 @@ function formatSize(kb) {
 }
 
 /**
+ * Format duration in seconds to human readable string
+ * @param {number} seconds - Duration in seconds
+ * @returns {string} Formatted duration
+ */
+function formatDuration(seconds) {
+    if (seconds < 60) {
+        return seconds.toFixed(0) + 's';
+    } else if (seconds < 3600) {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}m ${secs}s`;
+    } else {
+        const hours = Math.floor(seconds / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
+        return `${hours}h ${mins}m`;
+    }
+}
+
+/**
  * Format date to locale string
  * @param {string} isoString - ISO date string
  * @returns {string} Formatted date
@@ -121,21 +140,33 @@ function sleep(ms) {
 function validateWakeWord(wakeWord) {
     const trimmed = wakeWord.trim().replace(/\s+/g, ' ');
     
-    if (trimmed.length < 2) {
-        return { valid: false, error: 'Wake word must be at least 2 characters' };
+    // Check minimum length (4 characters)
+    if (trimmed.length < 4) {
+        return { valid: false, error: 'Wake word must be at least 4 characters' };
     }
     
-    if (trimmed.length > 30) {
-        return { valid: false, error: 'Wake word must be at most 30 characters' };
+    // Check maximum length (12 characters)
+    if (trimmed.length > 12) {
+        return { valid: false, error: 'Wake word must be at most 12 characters' };
     }
     
-    if (!/^[A-Za-z\s]+$/.test(trimmed)) {
-        return { valid: false, error: 'Wake word must contain only letters and spaces' };
+    // Check for valid characters (letters and single space between words)
+    if (!/^[A-Za-z]+( [A-Za-z]+)?$/.test(trimmed)) {
+        return { valid: false, error: 'Wake word must be 1-2 words, letters only, single space between words' };
     }
     
     const words = trimmed.split(' ').filter(w => w.length > 0);
+    
+    // Check word count (1-2 words)
     if (words.length > 2) {
         return { valid: false, error: 'Wake word must be 1-2 words' };
+    }
+    
+    // For 2-word wake words, ensure each word has at least 2 characters
+    if (words.length === 2) {
+        if (words[0].length < 2 || words[1].length < 2) {
+            return { valid: false, error: 'Each word must be at least 2 characters' };
+        }
     }
     
     return { valid: true, error: null };

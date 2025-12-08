@@ -285,12 +285,23 @@ class AudioStreamer {
     }
 
     /**
+     * Get the actual sample rate of the audio context
+     * @returns {number} The actual sample rate
+     */
+    getActualSampleRate() {
+        return this.audioContext ? this.audioContext.sampleRate : 16000;
+    }
+
+    /**
      * Start streaming audio
      */
     start() {
         if (!this.stream || !this.audioContext) {
             throw new Error('Audio not initialized');
         }
+
+        // Log actual sample rate for debugging
+        console.log(`AudioContext actual sample rate: ${this.audioContext.sampleRate}`);
 
         this.source = this.audioContext.createMediaStreamSource(this.stream);
         

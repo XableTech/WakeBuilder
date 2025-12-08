@@ -181,7 +181,7 @@ class TestTrainingConfig:
         config = TrainingConfig()
 
         assert config.model_type == "bc_resnet"
-        assert config.batch_size == 64
+        assert config.batch_size == 32
         assert config.num_epochs == 100
         assert config.learning_rate == 1e-3
 

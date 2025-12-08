@@ -59,6 +59,16 @@ COMMON_WORDS = [
     "did you hear", "I was thinking", "the other day", "you see",
     "anyway", "by the way", "speaking of", "as I was saying",
     "to be honest", "in my opinion", "I believe", "it seems like",
+    # Exclamations and loud phrases (critical for preventing false positives on loud speech)
+    "wow", "whoa", "yes", "no", "stop", "go", "wait", "look",
+    "watch out", "be careful", "hurry up", "come here", "over here",
+    "what the", "oh my god", "oh no", "oh yes", "oh wow",
+    "are you kidding", "no way", "get out", "shut up", "come on",
+    "let's go", "right now", "do it", "got it", "I got it",
+    "hello there", "hey you", "excuse me", "pardon me", "sorry",
+    # Short utterances that might be confused
+    "huh", "what", "yeah", "nope", "yep", "nah", "meh", "ugh",
+    "oops", "ouch", "yay", "boo", "shh", "psst", "hey hey",
 ]  # fmt: skip
 
 # Phonetically similar word patterns for common wake words
@@ -78,64 +88,539 @@ PHONETIC_SIMILAR_PATTERNS: dict[str, list[str]] = {
 def get_phonetically_similar_words(wake_word: str) -> list[str]:
     """
     Get phonetically similar words for a wake word.
+    
+    CRITICAL: This function generates "hard negatives" - words that sound
+    similar to the wake word but should NOT trigger detection. These are
+    essential for teaching the model to discriminate between the exact
+    wake word and similar-sounding words.
+    
+    This is a purely algorithmic approach - NO hardcoded names or words.
+    All variations are derived from the wake word itself.
+    
+    For multi-word wake words (e.g., "hey jarvis"), this also generates:
+    - Individual words alone ("hey", "jarvis") - CRITICAL for preventing
+      partial matches from triggering detection
+    - Words with common prefixes ("hi jarvis", "hey jarvie")
+    - Swapped/missing word combinations
 
     Args:
         wake_word: The wake word to find similar words for.
 
     Returns:
-        List of phonetically similar words/phrases.
+        List of phonetically similar words/phrases (sorted by importance).
     """
     wake_word_lower = wake_word.lower().strip()
-    similar_words: list[str] = []
+    
+    # Use lists to preserve priority order, sets for deduplication
+    partial_words: list[str] = []         # Individual words from multi-word wake words - HIGHEST priority
+    pure_prefixes: list[str] = []         # Exact prefixes (sa, sam, sami) - HIGHEST priority
+    prefix_extensions: list[str] = []     # Prefixes with endings (sama, sami, samy)
+    high_priority: list[str] = []         # Suffixes, edits
+    medium_priority: list[str] = []       # Phonetic variations
+    seen: set[str] = set()                # For deduplication
+    
+    # =========================================================================
+    # CRITICAL: Multi-word wake word handling (e.g., "hey jarvis")
+    # The model must learn to REJECT individual words and only accept the
+    # complete phrase. This is the #1 cause of false positives for multi-word
+    # wake words!
+    # =========================================================================
+    words = wake_word_lower.split()
+    if len(words) >= 2:
+        # Add each individual word as a hard negative (HIGHEST priority)
+        # e.g., for "open sesame": add "open" and "sesame" as negatives
+        for word in words:
+            if word not in seen and len(word) >= 2:
+                partial_words.append(word)
+                seen.add(word)
+        
+        # Generate phonetic variations for each word position
+        # This is purely algorithmic - no hardcoded word lists
+        for word_idx, word in enumerate(words):
+            other_words = words[:word_idx] + words[word_idx+1:]
+            
+            if len(word) >= 2:
+                # 1. Prefixes of this word (e.g., "ope", "open" for "open")
+                for i in range(2, len(word)):
+                    prefix = word[:i]
+                    if word_idx == 0:
+                        phrase = f"{prefix} {' '.join(other_words)}"
+                    else:
+                        phrase = f"{' '.join(words[:word_idx])} {prefix}"
+                        if word_idx < len(words) - 1:
+                            phrase += f" {' '.join(words[word_idx+1:])}"
+                    if phrase not in seen:
+                        partial_words.append(phrase)
+                        seen.add(phrase)
+                
+                # 2. Single character substitutions at end (phonetic variations)
+                vowels = "aeiou"
+                consonants = "bcdfghjklmnpqrstvwxyz"
+                
+                # Replace last character
+                for char in vowels + "y":
+                    if char != word[-1]:
+                        modified = word[:-1] + char
+                        if word_idx == 0:
+                            phrase = f"{modified} {' '.join(other_words)}"
+                        else:
+                            phrase = f"{' '.join(words[:word_idx])} {modified}"
+                            if word_idx < len(words) - 1:
+                                phrase += f" {' '.join(words[word_idx+1:])}"
+                        if phrase not in seen and phrase != wake_word_lower:
+                            partial_words.append(phrase)
+                            seen.add(phrase)
+                
+                # 3. Common ending substitutions
+                if len(word) > 3:
+                    for ending in ["ie", "y", "a", "o", "er", "is", "us", "en", "on"]:
+                        modified = word[:-1] + ending
+                        if modified != word:
+                            if word_idx == 0:
+                                phrase = f"{modified} {' '.join(other_words)}"
+                            else:
+                                phrase = f"{' '.join(words[:word_idx])} {modified}"
+                                if word_idx < len(words) - 1:
+                                    phrase += f" {' '.join(words[word_idx+1:])}"
+                            if phrase not in seen and phrase != wake_word_lower:
+                                partial_words.append(phrase)
+                                seen.add(phrase)
+        
+        # Add reversed/swapped word order
+        if len(words) == 2:
+            swapped = f"{words[1]} {words[0]}"
+            if swapped not in seen:
+                partial_words.append(swapped)
+                seen.add(swapped)
+        
+        # Add just the last word repeated (common confusion)
+        if len(words) == 2:
+            repeated = f"{words[1]} {words[1]}"
+            if repeated not in seen:
+                partial_words.append(repeated)
+                seen.add(repeated)
+    
+    # =========================================================================
+    # CRITICAL: Prefix matches (e.g., "sam" from "samix")
+    # These cause the most false positives!
+    # Pure prefixes MUST come first in the list!
+    # =========================================================================
+    if len(wake_word_lower) > 2:
+        # First: Add PURE prefixes in order (shortest to longest)
+        # These are the most critical - "sa", "sam", "sami" for "samix"
+        for i in range(2, len(wake_word_lower)):
+            prefix = wake_word_lower[:i]
+            if prefix not in seen:
+                pure_prefixes.append(prefix)
+                seen.add(prefix)
+        
+        # Second: Add prefix extensions (prefixes + common endings)
+        word_endings = ["a", "e", "i", "o", "y", "er", "ie", "ey", "ay", 
+                       "an", "en", "in", "on", "ar", "or", "ir",
+                       "la", "ra", "na", "ta", "da", "ma",
+                       "ly", "ry", "ny", "ty", "dy", "my"]
+        for i in range(2, len(wake_word_lower)):
+            prefix = wake_word_lower[:i]
+            for ending in word_endings:
+                extended = prefix + ending
+                if extended not in seen and extended != wake_word_lower:
+                    prefix_extensions.append(extended)
+                    seen.add(extended)
+    
+    # =========================================================================
+    # HIGH PRIORITY: Suffix matches and edit-distance-1 variations
+    # =========================================================================
+    if len(wake_word_lower) > 2:
+        # All suffixes (e.g., "mix" from "samix")
+        for i in range(1, len(wake_word_lower) - 1):
+            suffix = wake_word_lower[i:]
+            if suffix not in seen:
+                high_priority.append(suffix)
+                seen.add(suffix)
+        
+        # Single character deletions (e.g., "samx" from "samix")
+        for i in range(len(wake_word_lower)):
+            deleted = wake_word_lower[:i] + wake_word_lower[i+1:]
+            if deleted not in seen and deleted != wake_word_lower:
+                high_priority.append(deleted)
+                seen.add(deleted)
+        
+        # Single character duplications (e.g., "sammix" from "samix")
+        for i in range(len(wake_word_lower)):
+            doubled = wake_word_lower[:i] + wake_word_lower[i] + wake_word_lower[i:]
+            if doubled not in seen:
+                high_priority.append(doubled)
+                seen.add(doubled)
+        
+        # Adjacent character swaps (e.g., "asmix" from "samix")
+        for i in range(len(wake_word_lower) - 1):
+            swapped = wake_word_lower[:i] + wake_word_lower[i+1] + wake_word_lower[i] + wake_word_lower[i+2:]
+            if swapped not in seen:
+                high_priority.append(swapped)
+                seen.add(swapped)
+        
+        # Single character insertions at each position
+        vowels = "aeiou"
+        for i in range(len(wake_word_lower) + 1):
+            for char in vowels:
+                inserted = wake_word_lower[:i] + char + wake_word_lower[i:]
+                if inserted not in seen:
+                    high_priority.append(inserted)
+                    seen.add(inserted)
+    
+    # =========================================================================
+    # HIGH PRIORITY: Systematic character substitutions for last N characters
+    # This catches words like "samira" vs "samix" (same prefix, different ending)
+    # Pure algorithmic approach: no hardcoded lists
+    # 
+    # IMPORTANT: Exclude endings that contain the original last char or last 2 chars
+    # e.g., for "samix": exclude "samiex" (contains x), "samiix" (contains ix)
+    # =========================================================================
+    
+    # Helper function to generate substitutions for a single word
+    def generate_ending_substitutions(word: str, result_list: list, seen_set: set):
+        if len(word) < 3:
+            return
+            
+        alphabet = "abcdefghijklmnopqrstuvwxyz"
+        vowels = "aeiou"
+        consonants = "bcdfghjklmnpqrstvwxyz"
+        
+        # Original endings to exclude from generated words
+        original_last_char = word[-1]
+        original_last_2chars = word[-2:] if len(word) >= 2 else ""
+        
+        def is_valid_new_word(new_word: str) -> bool:
+            """Check that new word's ending doesn't contain original last char or last 2 chars."""
+            # Get the portion that was substituted (compare to original)
+            # For safety, check the entire new ending section
+            check_len = min(4, len(new_word))  # Check last 4 chars of new word
+            new_ending = new_word[-check_len:] if len(new_word) >= check_len else new_word
+            
+            # Exclude if new ending contains the original last character
+            if original_last_char in new_ending:
+                return False
+            # Exclude if new ending contains the original last 2 consecutive characters
+            if len(original_last_2chars) == 2 and original_last_2chars in new_ending:
+                return False
+            return True
+        
+        # Number of trailing characters to substitute (up to 3, or word length - 2)
+        num_trailing = min(3, len(word) - 2)
+        
+        # Single character substitutions for each of the last N positions
+        for pos_from_end in range(1, num_trailing + 1):
+            pos = len(word) - pos_from_end
+            original_char = word[pos]
+            
+            for new_char in alphabet:
+                if new_char != original_char:
+                    substituted = word[:pos] + new_char + word[pos+1:]
+                    if is_valid_new_word(substituted):
+                        if substituted not in seen_set and substituted != word:
+                            result_list.append(substituted)
+                            seen_set.add(substituted)
+        
+        # Two-character ending substitutions (last 2 chars replaced)
+        if len(word) >= 4:
+            prefix = word[:-2]
+            
+            def add_2char_ending(ending: str):
+                new_word = prefix + ending
+                if is_valid_new_word(new_word):
+                    if new_word not in seen_set and new_word != word:
+                        result_list.append(new_word)
+                        seen_set.add(new_word)
+            
+            # Pattern 1: consonant + vowel (e.g., "ra", "la", "na")
+            for c in consonants:
+                for v in vowels:
+                    add_2char_ending(c + v)
+            
+            # Pattern 2: vowel + consonant (e.g., "ar", "er", "in")
+            for v in vowels:
+                for c in consonants:
+                    add_2char_ending(v + c)
+            
+            # Pattern 3: vowel + vowel (e.g., "ia", "ea", "io")
+            for v1 in vowels:
+                for v2 in vowels:
+                    add_2char_ending(v1 + v2)
+        
+        # Three-character ending substitutions (last 3 chars replaced)
+        if len(word) >= 5:
+            prefix = word[:-3]
+            
+            def add_3char_ending(ending: str):
+                new_word = prefix + ending
+                if is_valid_new_word(new_word):
+                    if new_word not in seen_set and new_word != word:
+                        result_list.append(new_word)
+                        seen_set.add(new_word)
+            
+            # Pattern: vowel + consonant + vowel (e.g., "ira", "ara", "ona")
+            for v1 in vowels:
+                for c in consonants:
+                    for v2 in vowels:
+                        add_3char_ending(v1 + c + v2)
+            
+            # Pattern: consonant + vowel + consonant (e.g., "son", "man", "ler")
+            for c1 in consonants:
+                for v in vowels:
+                    for c2 in consonants:
+                        add_3char_ending(c1 + v + c2)
+    
+    # Apply to single word or each word in multi-word wake word
+    words_to_process = wake_word_lower.split()
+    if len(words_to_process) == 1:
+        # Single word wake word
+        generate_ending_substitutions(wake_word_lower, high_priority, seen)
+    else:
+        # Multi-word wake word (e.g., "hey siri")
+        # CRITICAL: Add each individual word as a high-priority negative
+        # This ensures the model learns to reject partial matches like just "hey" or just "siri"
+        for word in words_to_process:
+            if word not in seen and len(word) > 1:
+                # Add the word itself as a critical negative (highest priority)
+                pure_prefixes.append(word)
+                seen.add(word)
+        
+        # Generate substitutions for each word separately
+        for i, word in enumerate(words_to_process):
+            if len(word) >= 3:
+                # Generate substitutions for this word
+                word_subs: list[str] = []
+                word_seen: set[str] = set()
+                generate_ending_substitutions(word, word_subs, word_seen)
+                
+                # Reconstruct full phrase with substituted word
+                for sub_word in word_subs:
+                    new_phrase_words = words_to_process.copy()
+                    new_phrase_words[i] = sub_word
+                    new_phrase = " ".join(new_phrase_words)
+                    if new_phrase not in seen and new_phrase != wake_word_lower:
+                        high_priority.append(new_phrase)
+                        seen.add(new_phrase)
+                
+                # Also add the substituted word alone as a negative
+                for sub_word in word_subs:
+                    if sub_word not in seen:
+                        high_priority.append(sub_word)
+                        seen.add(sub_word)
 
-    # Check predefined patterns
-    for key, words in PHONETIC_SIMILAR_PATTERNS.items():
-        if key in wake_word_lower or wake_word_lower in key:
-            similar_words.extend(words)
-
-    # Generate variations by character substitution
-    substitutions = [
+    # =========================================================================
+    # MEDIUM PRIORITY: Phonetic substitutions
+    # These are sound-alike character replacements
+    # =========================================================================
+    phonetic_substitutions = [
+        # Consonant confusions
         ("c", "k"), ("k", "c"), ("s", "z"), ("z", "s"),
-        ("f", "v"), ("v", "f"), ("i", "e"), ("e", "i"),
-        ("a", "e"), ("e", "a"), ("t", "d"), ("d", "t"),
+        ("f", "v"), ("v", "f"), ("t", "d"), ("d", "t"),
         ("p", "b"), ("b", "p"), ("m", "n"), ("n", "m"),
+        ("g", "k"), ("k", "g"), ("j", "g"), ("g", "j"),
+        # Vowel confusions
+        ("i", "e"), ("e", "i"), ("a", "e"), ("e", "a"),
+        ("a", "o"), ("o", "a"), ("u", "o"), ("o", "u"),
+        ("i", "y"), ("y", "i"), ("e", "y"), ("y", "e"),
+        # Digraph confusions
         ("th", "t"), ("t", "th"), ("sh", "s"), ("s", "sh"),
-        ("ch", "k"), ("k", "ch"), ("ck", "k"), ("k", "ck"),
-    ]  # fmt: skip
+        ("ch", "k"), ("k", "ch"), ("ch", "sh"), ("sh", "ch"),
+        ("ck", "k"), ("k", "ck"), ("ck", "c"), ("c", "ck"),
+        ("ph", "f"), ("f", "ph"), ("gh", "f"), ("f", "gh"),
+        # X sound variations
+        ("x", "ks"), ("ks", "x"), ("x", "cks"), ("cks", "x"),
+        ("x", "cs"), ("cs", "x"), ("x", "z"), ("z", "x"),
+        # Common ending confusions
+        ("ix", "icks"), ("ix", "ics"), ("ix", "ik"), ("ix", "ic"),
+        ("er", "or"), ("or", "er"), ("er", "ar"), ("ar", "er"),
+        ("le", "el"), ("el", "le"), ("re", "er"), ("er", "re"),
+    ]
 
-    for old, new in substitutions:
+    for old, new in phonetic_substitutions:
         if old in wake_word_lower:
-            similar_words.append(wake_word_lower.replace(old, new, 1))
+            # Replace first occurrence
+            replaced = wake_word_lower.replace(old, new, 1)
+            if replaced not in seen and replaced != wake_word_lower:
+                medium_priority.append(replaced)
+                seen.add(replaced)
+            # Replace all occurrences
+            replaced_all = wake_word_lower.replace(old, new)
+            if replaced_all not in seen and replaced_all != wake_word_lower:
+                medium_priority.append(replaced_all)
+                seen.add(replaced_all)
 
-    # Add partial matches for multi-word wake words
+    # =========================================================================
+    # Handle multi-word wake words (e.g., "hey siri")
+    # =========================================================================
     words = wake_word_lower.split()
     if len(words) == 2:
-        similar_words.extend(words)
-        # Add with different connectors
-        similar_words.append(f"{words[0]} and {words[1]}")
-        similar_words.append(f"{words[0]} or {words[1]}")
+        # Each word alone is a critical negative - add to pure_prefixes for priority
+        for word in words:
+            if word not in seen and len(word) > 1:
+                pure_prefixes.append(word)
+                seen.add(word)
+        # Common filler words between
+        for filler in ["and", "or", "the", "a", "to", "for"]:
+            phrase = f"{words[0]} {filler} {words[1]}"
+            if phrase not in seen:
+                medium_priority.append(phrase)
+                seen.add(phrase)
     
-    # Add truncated versions (first/last syllables) - hard negatives
-    if len(wake_word_lower) > 3:
-        similar_words.append(wake_word_lower[:len(wake_word_lower)//2])
-        similar_words.append(wake_word_lower[len(wake_word_lower)//2:])
-        similar_words.append(wake_word_lower[:-1])  # Missing last char
-        similar_words.append(wake_word_lower[1:])   # Missing first char
+    # =========================================================================
+    # Add common speech patterns around the wake word
+    # =========================================================================
+    speech_prefixes = ["hey ", "hi ", "oh ", "say ", "the ", "a "]
+    speech_suffixes = [" please", " now", " here", "s", "'s", "ed", "ing"]
     
-    # Add with common prefixes/suffixes
-    prefixes = ["hey ", "hi ", "oh ", "the ", "a "]
-    suffixes = [" please", " now", " here", " there"]
-    for prefix in prefixes:
-        similar_words.append(prefix + wake_word_lower)
-    for suffix in suffixes:
-        similar_words.append(wake_word_lower + suffix)
+    for prefix in speech_prefixes:
+        phrase = prefix + wake_word_lower
+        if phrase not in seen:
+            medium_priority.append(phrase)
+            seen.add(phrase)
+    for suffix in speech_suffixes:
+        phrase = wake_word_lower + suffix
+        if phrase not in seen:
+            medium_priority.append(phrase)
+            seen.add(phrase)
 
-    # Remove duplicates and the original word
-    similar_words = list(set(similar_words))
-    if wake_word_lower in similar_words:
-        similar_words.remove(wake_word_lower)
-
-    return similar_words
+    # =========================================================================
+    # Combine in strict priority order
+    # Order: partial_words > pure_prefixes > prefix_extensions > high_priority > medium_priority
+    # =========================================================================
+    all_words = []
+    
+    # 0. Partial words first (for multi-word wake words) - MOST CRITICAL
+    # e.g., "hey" and "jarvis" alone for "hey jarvis"
+    for word in partial_words:
+        if word and len(word) > 1 and word != wake_word_lower:
+            all_words.append(word)
+    
+    # 1. Pure prefixes (sa, sam, sami) - VERY CRITICAL
+    for word in pure_prefixes:
+        if word and len(word) > 1 and word != wake_word_lower:
+            all_words.append(word)
+    
+    # 2. Prefix extensions (sama, sami, samy, etc.)
+    for word in prefix_extensions:
+        if word and len(word) > 1 and word != wake_word_lower:
+            all_words.append(word)
+    
+    # 3. High priority (suffixes, edits)
+    for word in high_priority:
+        if word and len(word) > 1 and word != wake_word_lower:
+            all_words.append(word)
+    
+    # 4. Medium priority (phonetic variations)
+    for word in medium_priority:
+        if word and len(word) > 1 and word != wake_word_lower:
+            all_words.append(word)
+    
+    # =========================================================================
+    # Final filter: Remove words where the SUBSTITUTED ending contains the
+    # original last char or last 2 consecutive chars
+    # This prevents words like "samiex" (contains x) or "samiix" (contains ix)
+    # Handle both single-word and multi-word wake words
+    # =========================================================================
+    def get_forbidden_patterns(word: str) -> tuple[str, str, int]:
+        """Get the last char, last 2 chars, and word length."""
+        return (word[-1], word[-2:] if len(word) >= 2 else "", len(word))
+    
+    def has_forbidden_ending(candidate: str, original_word: str, last_char: str, last_2chars: str) -> bool:
+        """
+        Check if candidate's ending contains forbidden patterns.
+        
+        Rules:
+        1. If candidate is a pure prefix of original (shorter), keep it
+        2. If candidate ends with the original last char, exclude it
+        3. If candidate ends with the original last 2 chars, exclude it
+        """
+        # If candidate is shorter than original, it's likely a prefix - keep it
+        if len(candidate) < len(original_word) - 1:
+            return False
+        
+        # Check the last 2 characters of the candidate
+        candidate_last_2 = candidate[-2:] if len(candidate) >= 2 else candidate
+        candidate_last_1 = candidate[-1] if candidate else ""
+        
+        # Exclude if candidate ends with the original last character
+        if candidate_last_1 == last_char:
+            return True
+        
+        # Exclude if candidate's last 2 chars contain the original last 2 chars
+        if len(last_2chars) == 2 and last_2chars in candidate_last_2:
+            return True
+        
+        # Also check if the original last char appears in the last 2 positions
+        # This catches cases like "samiex" where x is in position -2
+        if last_char in candidate_last_2:
+            return True
+            
+        return False
+    
+    # Get forbidden patterns from wake word (handle multi-word)
+    wake_words = wake_word_lower.split()
+    forbidden_patterns = [get_forbidden_patterns(w) for w in wake_words]
+    
+    # Filter the results
+    filtered_words = []
+    for candidate in all_words:
+        # For multi-word candidates, check each word part
+        candidate_parts = candidate.split()
+        
+        # Only apply strict filtering to single-word wake words
+        # or to the corresponding parts of multi-word wake words
+        if len(wake_words) == 1:
+            # Single word wake word - apply filter to all candidates
+            last_char, last_2chars, orig_len = forbidden_patterns[0]
+            original_word = wake_words[0]
+            
+            if has_forbidden_ending(candidate, original_word, last_char, last_2chars):
+                continue
+        else:
+            # Multi-word wake word - only filter if candidate has same structure
+            # and the corresponding part has forbidden ending
+            should_exclude = False
+            
+            # CRITICAL: Never filter out the exact individual words from the wake word
+            # These are essential negatives to prevent partial match detection
+            if candidate in wake_words:
+                # This is an exact word from the wake word - always keep it
+                pass
+            elif len(candidate_parts) == len(wake_words) and any(part == wake_words[i] for i, part in enumerate(candidate_parts)):
+                # At least one part is exactly the same as the original
+                # This is a greeting alternative like "hi jarvis" - always keep it
+                # These are critical for multi-word wake word discrimination
+                pass
+            elif len(candidate_parts) == len(wake_words):
+                # Same structure - check each part against its corresponding original
+                # But SKIP filtering if the part is EXACTLY the same as the original
+                # (e.g., "hi jarvis" should keep "jarvis" unchanged)
+                for i, part in enumerate(candidate_parts):
+                    original_word = wake_words[i]
+                    
+                    # Skip filtering if this part is exactly the original word
+                    if part == original_word:
+                        continue
+                    
+                    last_char, last_2chars, orig_len = forbidden_patterns[i]
+                    if has_forbidden_ending(part, original_word, last_char, last_2chars):
+                        should_exclude = True
+                        break
+            elif len(candidate_parts) == 1:
+                # Single word from multi-word wake word - check against all patterns
+                # But skip if it's one of the original words
+                for i, (last_char, last_2chars, orig_len) in enumerate(forbidden_patterns):
+                    original_word = wake_words[i]
+                    if has_forbidden_ending(candidate, original_word, last_char, last_2chars):
+                        should_exclude = True
+                        break
+            
+            if should_exclude:
+                continue
+        
+        filtered_words.append(candidate)
+    
+    return filtered_words
 
 
 def generate_random_phrases(num_phrases: int = 50) -> list[str]:
@@ -245,7 +730,7 @@ class NegativeExampleGenerator:
         num_voices: Optional[int] = None,
         add_noise: bool = True,
     ) -> Iterator[AugmentedSample]:
-        """Generate negative examples from random speech."""
+        """Generate negative examples from random speech with volume variations."""
         if not self.tts_available or self._tts is None:
             return
 
@@ -262,14 +747,25 @@ class NegativeExampleGenerator:
                 audio, _ = self._tts.synthesize(phrase, voice_name=voice_name)
                 audio = pad_or_trim_audio(audio, self.target_length)
 
+                # Normalize audio first
+                max_val = np.abs(audio).max()
+                if max_val > 0.01:
+                    audio = audio / max_val * 0.9
+                
+                # Apply random amplitude scaling to simulate quiet to loud speech
+                # This helps the model learn to reject loud non-wake-word speech
+                amplitude_scale = random.uniform(0.3, 1.5)  # 0.3x to 1.5x volume
+                scaled_audio = np.clip(audio * amplitude_scale, -1.0, 1.0).astype(np.float32)
+
                 yield AugmentedSample(
-                    audio=audio,
+                    audio=scaled_audio,
                     sample_rate=self.target_sample_rate,
                     label=0,
                     metadata={
                         "source": "random_speech",
                         "text": phrase,
                         "voice": voice_name,
+                        "amplitude_scale": amplitude_scale,
                     },
                 )
 
@@ -278,7 +774,7 @@ class NegativeExampleGenerator:
                     noise = self._noise.get_random_noise(
                         self.target_duration, self.target_sample_rate
                     )
-                    noisy = mix_audio_with_noise(audio, noise, snr_db)
+                    noisy = mix_audio_with_noise(scaled_audio, noise, snr_db)
 
                     yield AugmentedSample(
                         audio=noisy,
@@ -288,6 +784,7 @@ class NegativeExampleGenerator:
                             "source": "random_speech",
                             "text": phrase,
                             "snr_db": snr_db,
+                            "amplitude_scale": amplitude_scale,
                         },
                     )
             except Exception:
@@ -389,6 +886,58 @@ class NegativeExampleGenerator:
         except Exception:
             # Fallback to simple white noise on any error
             return np.random.randn(self.target_length).astype(np.float32) * 0.5
+
+    def generate_loud_sounds(self, num_samples: int = 100) -> Iterator[AugmentedSample]:
+        """Generate loud non-speech sounds to prevent false positives on screams, claps, etc."""
+        for i in range(num_samples):
+            sound_type = random.choice(["burst", "sweep", "impulse", "modulated"])
+            
+            if sound_type == "burst":
+                # Sudden loud burst (like a clap or bang)
+                audio = np.zeros(self.target_length, dtype=np.float32)
+                burst_start = random.randint(0, self.target_length // 2)
+                burst_len = random.randint(1000, 5000)
+                burst_end = min(burst_start + burst_len, self.target_length)
+                audio[burst_start:burst_end] = np.random.randn(burst_end - burst_start).astype(np.float32)
+                # Apply envelope
+                envelope = np.exp(-np.linspace(0, 5, burst_end - burst_start))
+                audio[burst_start:burst_end] *= envelope
+                
+            elif sound_type == "sweep":
+                # Frequency sweep (like a whistle or siren)
+                t = np.linspace(0, self.target_duration, self.target_length)
+                start_freq = random.uniform(200, 1000)
+                end_freq = random.uniform(1000, 4000)
+                freq = np.linspace(start_freq, end_freq, self.target_length)
+                audio = np.sin(2 * np.pi * freq * t).astype(np.float32)
+                
+            elif sound_type == "impulse":
+                # Sharp impulse (like a door slam)
+                audio = np.zeros(self.target_length, dtype=np.float32)
+                num_impulses = random.randint(1, 3)
+                for _ in range(num_impulses):
+                    pos = random.randint(0, self.target_length - 100)
+                    audio[pos:pos+100] = np.random.randn(100).astype(np.float32) * random.uniform(0.5, 1.0)
+                    
+            else:  # modulated
+                # Amplitude modulated noise (like a scream or yell)
+                t = np.linspace(0, self.target_duration, self.target_length)
+                carrier = np.random.randn(self.target_length).astype(np.float32)
+                mod_freq = random.uniform(5, 20)  # Modulation frequency
+                modulator = 0.5 + 0.5 * np.sin(2 * np.pi * mod_freq * t)
+                audio = (carrier * modulator).astype(np.float32)
+            
+            # Normalize to high amplitude (loud sounds)
+            max_val = np.abs(audio).max()
+            if max_val > 0:
+                audio = audio / max_val * random.uniform(0.7, 1.0)  # High amplitude
+            
+            yield AugmentedSample(
+                audio=audio,
+                sample_rate=self.target_sample_rate,
+                label=0,
+                metadata={"source": f"loud_{sound_type}", "sample_idx": i},
+            )
 
     def generate_all_negatives(
         self,
