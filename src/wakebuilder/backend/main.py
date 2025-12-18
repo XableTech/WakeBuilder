@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
 from ..config import Config, ensure_directories
-from .routes import models, testing, training
+from .routes import cache, models, testing, training
 from .schemas import APIInfo, HealthResponse, SystemInfo
 
 # Frontend directory path
@@ -77,6 +77,10 @@ API_TAGS_METADATA = [
         "name": "testing",
         "description": "Model testing endpoints (file-based and real-time WebSocket)",
     },
+    {
+        "name": "cache",
+        "description": "Cache management endpoints (build, clear, status)",
+    },
 ]
 
 
@@ -128,6 +132,7 @@ app.add_middleware(
 app.include_router(training.router, prefix="/api/train", tags=["training"])
 app.include_router(models.router, prefix="/api/models", tags=["models"])
 app.include_router(testing.router, prefix="/api/test", tags=["testing"])
+app.include_router(cache.router, prefix="/api/cache", tags=["cache"])
 
 
 # ============================================================================

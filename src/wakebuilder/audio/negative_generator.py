@@ -467,6 +467,31 @@ def get_phonetically_similar_words(wake_word: str) -> list[str]:
                 seen.add(phrase)
     
     # =========================================================================
+    # Add common short words that often cause false positives
+    # These are words people say frequently that might trigger detection
+    # =========================================================================
+    common_short_words = [
+        # Affirmations/responses
+        "ok", "okay", "yes", "no", "yeah", "yep", "nope", "sure", "right",
+        # Greetings
+        "hi", "hey", "hello", "bye", "yo",
+        # Filler words
+        "um", "uh", "ah", "oh", "hmm", "huh", "wow", "ow", "ooh", "aah",
+        # Common short words
+        "so", "go", "do", "see", "be", "me", "we", "he", "she",
+        "it", "is", "as", "at", "to", "or", "if", "up", "on", "in",
+        # Question words
+        "what", "who", "why", "how", "when", "where",
+        # Common verbs
+        "stop", "start", "wait", "look", "come", "here", "there",
+    ]
+    
+    for word in common_short_words:
+        if word not in seen and word != wake_word_lower:
+            medium_priority.append(word)
+            seen.add(word)
+    
+    # =========================================================================
     # Add common speech patterns around the wake word
     # =========================================================================
     speech_prefixes = ["hey ", "hi ", "oh ", "say ", "the ", "a "]

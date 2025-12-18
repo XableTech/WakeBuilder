@@ -48,6 +48,22 @@
                 <button class="filter-btn" data-filter="default">Default</button>
             </div>
 
+            <!-- Cache Status Panel - On Home Page -->
+            <div class="cache-panel-prominent" id="cache-panel-home">
+                <h4>📦 Negative Data Cache <span class="required-badge" id="cache-required-badge">Required</span></h4>
+                <p class="cache-description">The cache contains pre-processed negative audio samples needed for training. Build it before training your first model.</p>
+                <div class="cache-info-panel">
+                    <div class="cache-status">
+                        <span id="home-cache-status-text">Loading cache info...</span>
+                        <span id="home-cache-chunk-count" class="cache-count"></span>
+                    </div>
+                    <div class="cache-actions">
+                        <button type="button" id="home-build-cache-btn" class="btn btn-primary">Build Cache</button>
+                        <button type="button" id="home-clear-cache-btn" class="btn btn-danger btn-sm">Clear</button>
+                    </div>
+                </div>
+            </div>
+
             <div id="models-grid" class="models-grid">
                 <!-- Models will be loaded here -->
                 <div class="loading-spinner">Loading models...</div>
@@ -106,51 +122,40 @@
                     <details class="advanced-options">
                         <summary>Advanced Options</summary>
                         
-                        <h4 class="options-section-title">Negative Data Cache</h4>
-                        <div class="cache-info-panel" id="cache-info-panel">
-                            <div class="cache-status">
-                                <span id="cache-status-text">Loading cache info...</span>
-                                <span id="cache-chunk-count" class="cache-count"></span>
-                            </div>
-                            <div class="cache-actions">
-                                <button type="button" id="build-cache-btn" class="btn btn-secondary btn-sm">Build Cache</button>
-                                <button type="button" id="clear-cache-btn" class="btn btn-danger btn-sm">Clear</button>
-                            </div>
-                        </div>
-                        
                         <h4 class="options-section-title">Data Generation</h4>
                         <div class="options-grid">
                             <div class="form-group">
                                 <label for="target-positive-samples">Target Positive Samples</label>
-                                <input type="number" id="target-positive-samples" value="4000" min="2000" max="10000" step="500">
-                                <div class="input-hint">2000-10000 samples (4000 recommended)</div>
+                                <input type="number" id="target-positive-samples" value="5000" min="5000" max="8000" step="500">
+                                <div class="input-hint">5000 - Max Negative Chunks samples</div>
                             </div>
                             <div class="form-group">
                                 <label for="max-real-negatives">Max Negative Chunks</label>
-                                <input type="number" id="max-real-negatives" value="0" min="0" max="100000" step="1000">
+                                <input type="number" id="max-real-negatives" value="0" min="0" max="47438" step="1000">
                                 <div class="input-hint">0 = auto (uses ratio below)</div>
                             </div>
                             <div class="form-group" id="negative-ratio-group">
                                 <label for="negative-ratio">Negative:Positive Ratio</label>
                                 <select id="negative-ratio">
-                                    <option value="1.0">1.0x (equal)</option>
-                                    <option value="1.5" selected>1.5x (recommended)</option>
-                                    <option value="2.0">2.0x</option>
+                                    <option value="1.0">1.0x (minimal)</option>
+                                    <option value="1.5">1.5x</option>
+                                    <option value="2.0" selected>2.0x (recommended)</option>
                                     <option value="2.5">2.5x</option>
-                                    <option value="3.0">3.0x (more negatives)</option>
+                                    <option value="3.0">3.0x (more robust)</option>
                                 </select>
-                                <div class="input-hint">Real negatives = positives × ratio (1-3x)</div>
+                                <div class="input-hint">Real negatives from cache. 2-3x recommended for good discrimination.</div>
                             </div>
                             <div class="form-group">
                                 <label for="hard-negative-ratio">Hard Negative Ratio</label>
                                 <select id="hard-negative-ratio">
-                                    <option value="1.0">1.0x</option>
-                                    <option value="1.5">1.5x</option>
-                                    <option value="2.0" selected>2.0x (recommended)</option>
-                                    <option value="2.5">2.5x</option>
-                                    <option value="3.0">3.0x (aggressive)</option>
+                                    <option value="1.0">1.0x (experimental)</option>
+                                    <option value="2.0">2.0x (minimal)</option>
+                                    <option value="3.0">3.0x</option>
+                                    <option value="4.0" selected>4.0x (recommended)</option>
+                                    <option value="5.0">5.0x</option>
+                                    <option value="6.0">6.0x (maximum discrimination)</option>
                                 </select>
-                                <div class="input-hint">Hard negatives = positives × ratio (1-3x)</div>
+                                <div class="input-hint">Similar-sounding words (TTS). 4-6x recommended to prevent false positives.</div>
                             </div>
                             <div class="form-group checkbox-group">
                                 <label>
@@ -204,8 +209,8 @@
                             </div>
                             <div class="form-group">
                                 <label for="label-smoothing">Label Smoothing <span class="tooltip-icon" data-tooltip="label-smooth">?</span></label>
-                                <input type="number" id="label-smoothing" value="0.25" min="0" max="0.4" step="0.01">
-                                <div class="input-hint">Prevents overconfident predictions (0.25 recommended)</div>
+                                <input type="number" id="label-smoothing" value="0.1" min="0" max="0.3" step="0.01">
+                                <div class="input-hint">Lower values allow more confident predictions (0.1 recommended)</div>
                             </div>
                             <div class="form-group">
                                 <label for="mixup-alpha">Mixup Alpha <span class="tooltip-icon" data-tooltip="mixup">?</span></label>
@@ -224,6 +229,11 @@
                                 <div class="input-hint">Better handling of hard examples (recommended)</div>
                             </div>
                             <div class="form-group">
+                                <label for="focal-alpha">Focal Alpha <span class="tooltip-icon" data-tooltip="focal-alpha">?</span></label>
+                                <input type="number" id="focal-alpha" value="0.5" min="0.1" max="0.9" step="0.05">
+                                <div class="input-hint">Weight for positive class (0.5 = balanced, higher = favor positives)</div>
+                            </div>
+                            <div class="form-group">
                                 <label for="focal-gamma">Focal Gamma <span class="tooltip-icon" data-tooltip="focal-gamma">?</span></label>
                                 <input type="number" id="focal-gamma" value="2.0" min="0.5" max="5.0" step="0.5">
                                 <div class="input-hint">Higher = more focus on hard examples (2.0 recommended)</div>
@@ -235,12 +245,27 @@
                                 </label>
                                 <div class="input-hint">Adds attention layer for better discrimination (recommended)</div>
                             </div>
+                            <div class="form-group checkbox-group">
+                                <label>
+                                    <input type="checkbox" id="use-se-block" checked>
+                                    SE Block <span class="tooltip-icon" data-tooltip="se-block">?</span>
+                                </label>
+                                <div class="input-hint">Squeeze-and-Excitation for channel attention</div>
+                            </div>
+                            <div class="form-group checkbox-group">
+                                <label>
+                                    <input type="checkbox" id="use-tcn" checked>
+                                    TCN Block <span class="tooltip-icon" data-tooltip="tcn">?</span>
+                                </label>
+                                <div class="input-hint">Temporal Convolutional Network for local patterns</div>
+                            </div>
                             <div class="form-group">
                                 <label for="classifier-dims">Classifier Layers</label>
                                 <select id="classifier-dims">
                                     <option value="256,128">256, 128 (default)</option>
                                     <option value="512,256">512, 256 (deeper)</option>
-                                    <option value="512,256,128">512, 256, 128 (deepest)</option>
+                                    <option value="512,256,128">512, 256, 128 (deep)</option>
+                                    <option value="768,512,256,128">768, 512, 256, 128 (deepest)</option>
                                 </select>
                                 <div class="input-hint">Deeper classifiers can learn finer distinctions</div>
                             </div>
@@ -275,8 +300,8 @@
                     <div class="tooltip-content" id="tooltip-label-smooth">
                         <button class="tooltip-close">&times;</button>
                         <h4>Label Smoothing</h4>
-                        <p><strong>Simple:</strong> Makes the model less overconfident in its predictions.</p>
-                        <p><strong>Technical:</strong> Converts hard labels (0/1) to soft labels (e.g., 0.125/0.875 with 0.25 smoothing). Higher smoothing prevents the model from being too confident, which helps reject similar-sounding words.</p>
+                        <p><strong>Simple:</strong> Controls how confident the model can be. Lower values = more confident predictions.</p>
+                        <p><strong>Technical:</strong> Converts hard labels (0/1) to soft labels (e.g., 0.05/0.95 with 0.1 smoothing). A value of 0.1 allows the model to be confident on true wake words while still providing some regularization. Too high (0.25+) can cause the model to miss detections.</p>
                     </div>
                     <div class="tooltip-content" id="tooltip-mixup">
                         <button class="tooltip-close">&times;</button>
@@ -290,6 +315,12 @@
                         <p><strong>Simple:</strong> Helps the model focus on difficult examples it gets wrong.</p>
                         <p><strong>Technical:</strong> Focal loss down-weights easy examples and focuses training on hard negatives (similar-sounding words). This is crucial for wake word detection where the model must confidently reject words like "samira" when trained on "samix".</p>
                     </div>
+                    <div class="tooltip-content" id="tooltip-focal-alpha">
+                        <button class="tooltip-close">&times;</button>
+                        <h4>Focal Alpha</h4>
+                        <p><strong>Simple:</strong> How much weight to give positive samples (wake word) vs negatives.</p>
+                        <p><strong>Technical:</strong> Class weighting factor in focal loss. Alpha=0.25 gives more weight to negatives (conservative, fewer false positives). Alpha=0.5 is balanced. Alpha>0.5 favors positives (higher recall/F1 but may increase false positives). Increase this if F1 score is too low.</p>
+                    </div>
                     <div class="tooltip-content" id="tooltip-focal-gamma">
                         <button class="tooltip-close">&times;</button>
                         <h4>Focal Gamma</h4>
@@ -301,6 +332,18 @@
                         <h4>Self-Attention</h4>
                         <p><strong>Simple:</strong> Helps the model focus on the most important parts of the audio.</p>
                         <p><strong>Technical:</strong> Adds a multi-head self-attention layer before the classifier. This allows the model to weigh different parts of the AST embedding differently, potentially improving discrimination between similar-sounding words. Increases trainable parameters by ~2.4M.</p>
+                    </div>
+                    <div class="tooltip-content" id="tooltip-se-block">
+                        <button class="tooltip-close">&times;</button>
+                        <h4>SE Block (Squeeze-and-Excitation)</h4>
+                        <p><strong>Simple:</strong> Learns which audio features are most important and emphasizes them.</p>
+                        <p><strong>Technical:</strong> Channel attention mechanism that models interdependencies between features. Squeezes the embedding through a bottleneck, then uses learned weights to re-scale features. Particularly effective after attention layers for refining feature selection. Adds minimal parameters (~150K).</p>
+                    </div>
+                    <div class="tooltip-content" id="tooltip-tcn">
+                        <button class="tooltip-close">&times;</button>
+                        <h4>TCN Block (Temporal Convolutional Network)</h4>
+                        <p><strong>Simple:</strong> Captures local patterns in the audio that attention might miss.</p>
+                        <p><strong>Technical:</strong> Applies 1D convolutions with residual connections to capture local temporal patterns in the embedding space. Uses dilated convolutions for larger receptive fields. Complements attention by focusing on local structure rather than global relationships. Adds ~1.2M parameters.</p>
                     </div>
                     <div class="tooltip-content" id="tooltip-early-stop">
                         <button class="tooltip-close">&times;</button>
@@ -364,6 +407,7 @@
                         </div>
                         <div class="progress-text">
                             <span id="progress-percent">0%</span>
+                            <span id="elapsed-time" class="elapsed-time"></span>
                         </div>
                     </div>
 
@@ -438,6 +482,14 @@
                                 <div class="detail-item">
                                     <span class="detail-label">Self-Attention</span>
                                     <span class="detail-value" id="hp-attention">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">SE Block</span>
+                                    <span class="detail-value" id="hp-se-block">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">TCN Block</span>
+                                    <span class="detail-value" id="hp-tcn">-</span>
                                 </div>
                                 <div class="detail-item">
                                     <span class="detail-label">Classifier Layers</span>
@@ -629,6 +681,22 @@
                             </div>
                         </div>
 
+                        <!-- Training Recordings -->
+                        <div class="result-panel">
+                            <h3>Training Recordings</h3>
+                            <div id="result-recordings-list" class="recordings-list-compact">
+                                <span class="loading-text">Loading recordings...</span>
+                            </div>
+                        </div>
+
+                        <!-- ONNX Export -->
+                        <div class="result-panel">
+                            <h3>ONNX Export</h3>
+                            <div id="result-onnx-status" class="onnx-status">
+                                <span class="loading-text">Checking ONNX status...</span>
+                            </div>
+                        </div>
+
                         <!-- Download Options -->
                         <div class="result-panel">
                             <h3>Download Model</h3>
@@ -709,6 +777,20 @@
                     </div>
                 </div>
 
+                <!-- Model Format Selection -->
+                <div class="test-panel">
+                    <h3>Model Format</h3>
+                    <div class="checkbox-group">
+                        <label>
+                            <input type="checkbox" id="use-onnx">
+                            Use ONNX Model (if available)
+                        </label>
+                    </div>
+                    <div id="onnx-model-status" class="device-hint">
+                        Select a model to check ONNX availability
+                    </div>
+                </div>
+
                 <!-- Detection Visualization -->
                 <div class="test-panel detection-panel">
                     <h3>Real-time Detection</h3>
@@ -734,6 +816,15 @@
                             </svg>
                             Start Listening
                         </button>
+                    </div>
+                </div>
+
+                <!-- Detection Counter -->
+                <div class="test-panel">
+                    <h3>Session Counter</h3>
+                    <div class="detection-counter-container">
+                        <div class="detection-counter" id="detection-counter">0</div>
+                        <div class="detection-counter-label">Detections this session</div>
                     </div>
                 </div>
 

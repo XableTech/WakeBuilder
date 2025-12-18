@@ -135,6 +135,15 @@ const api = {
         if (options.useRealNegatives !== undefined) {
             formData.append('use_real_negatives', options.useRealNegatives);
         }
+        if (options.negativeRatio !== undefined) {
+            formData.append('negative_ratio', options.negativeRatio);
+        }
+        if (options.hardNegativeRatio !== undefined) {
+            formData.append('hard_negative_ratio', options.hardNegativeRatio);
+        }
+        if (options.useHardNegatives !== undefined) {
+            formData.append('use_hard_negatives', options.useHardNegatives);
+        }
         
         // Training hyperparameters
         if (options.batchSize) {
@@ -160,11 +169,20 @@ const api = {
         if (options.useFocalLoss !== undefined) {
             formData.append('use_focal_loss', options.useFocalLoss);
         }
+        if (options.focalAlpha !== undefined) {
+            formData.append('focal_alpha', options.focalAlpha);
+        }
         if (options.focalGamma !== undefined) {
             formData.append('focal_gamma', options.focalGamma);
         }
         if (options.useAttention !== undefined) {
             formData.append('use_attention', options.useAttention);
+        }
+        if (options.useSeBlock !== undefined) {
+            formData.append('use_se_block', options.useSeBlock);
+        }
+        if (options.useTcn !== undefined) {
+            formData.append('use_tcn', options.useTcn);
         }
         if (options.classifierHiddenDims !== undefined) {
             formData.append('classifier_hidden_dims', JSON.stringify(options.classifierHiddenDims));
@@ -237,6 +255,15 @@ const api = {
     },
 
     /**
+     * Get training history for a model
+     * @param {string} modelId - Model ID
+     * @returns {Promise<object>} Training history (loss, accuracy per epoch)
+     */
+    async getTrainingHistory(modelId) {
+        return this.get(`/api/models/${modelId}/training-history`);
+    },
+
+    /**
      * Download model
      * @param {string} modelId - Model ID
      * @returns {Promise<Blob>} Model ZIP file
@@ -253,6 +280,22 @@ const api = {
      */
     async deleteModel(modelId) {
         return this.delete(`/api/models/${modelId}`);
+    },
+
+    /**
+     * List orphaned recordings (recordings without associated models)
+     * @returns {Promise<object>} List of orphaned recordings
+     */
+    async listOrphanedRecordings() {
+        return this.get('/api/models/recordings/orphaned');
+    },
+
+    /**
+     * Clean up orphaned recordings
+     * @returns {Promise<object>} Cleanup result
+     */
+    async cleanOrphanedRecordings() {
+        return this.delete('/api/models/recordings/orphaned');
     },
 
     // ========================================================================
@@ -324,11 +367,19 @@ const api = {
     },
 
     // ========================================================================
-    // Negative Data Cache
+    // Cache Management
     // ========================================================================
 
     /**
-     * Get negative data cache info
+     * Get comprehensive cache status
+     * @returns {Promise<object>} Cache status
+     */
+    async getCacheStatus() {
+        return this.get('/api/cache/status');
+    },
+
+    /**
+     * Get negative data cache info (legacy)
      * @returns {Promise<object>} Cache info with chunk count
      */
     async getNegativeCacheInfo() {
@@ -336,18 +387,191 @@ const api = {
     },
 
     /**
-     * Build negative data cache
-     * @returns {Promise<object>} Build status
+     * Build audio cache with SSE progress
+     * @param {function} onProgress - Progress callback
+     * @returns {Promise<object>} Build result
      */
-    async buildNegativeCache() {
-        return this.post('/api/train/negative-cache/build');
+    async buildAudioCache(onProgress) {
+        return this.streamSSE('/api/cache/build/audio', onProgress);
     },
 
     /**
-     * Clear negative data cache
+     * Build spectrogram cache with SSE progress
+     * @param {function} onProgress - Progress callback
+     * @returns {Promise<object>} Build result
+     */
+    async buildSpectrogramCache(onProgress) {
+        return this.streamSSE('/api/cache/build/spectrograms', onProgress);
+    },
+
+    /**
+     * Build all caches with SSE progress
+     * @param {function} onProgress - Progress callback
+     * @returns {Promise<object>} Build result
+     */
+    async buildAllCaches(onProgress) {
+        return this.streamSSE('/api/cache/build/all', onProgress);
+    },
+
+    /**
+     * Clear all caches
+     * @returns {Promise<object>} Clear status
+     */
+    async clearAllCaches() {
+        return this.delete('/api/cache/all');
+    },
+
+    /**
+     * Clear negative data cache (legacy)
      * @returns {Promise<object>} Clear status
      */
     async clearNegativeCache() {
         return this.delete('/api/train/negative-cache');
+    },
+
+    /**
+     * Stream SSE events from a POST endpoint
+     * @param {string} endpoint - API endpoint
+     * @param {function} onProgress - Progress callback
+     * @returns {Promise<object>} Final result
+     */
+    async streamSSE(endpoint, onProgress) {
+        return new Promise((resolve, reject) => {
+            fetch(`${API_BASE}${endpoint}`, {
+                method: 'POST',
+            }).then(response => {
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let lastEvent = null;
+
+                function read() {
+                    reader.read().then(({ done, value }) => {
+                        if (done) {
+                            resolve(lastEvent);
+                            return;
+                        }
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || '';
+
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                try {
+                                    const event = JSON.parse(line.slice(6));
+                                    lastEvent = event;
+                                    if (onProgress) {
+                                        onProgress(event);
+                                    }
+                                    if (event.type === 'error') {
+                                        reject(new Error(event.message));
+                                        return;
+                                    }
+                                } catch (e) {
+                                    // Ignore parse errors
+                                }
+                            }
+                        }
+                        read();
+                    }).catch(reject);
+                }
+                read();
+            }).catch(reject);
+        });
+    },
+
+    // ========================================================================
+    // Model Recordings
+    // ========================================================================
+
+    /**
+     * Get recordings for a model
+     * @param {string} modelId - Model ID
+     * @returns {Promise<object>} Recordings list
+     */
+    async getModelRecordings(modelId) {
+        return this.get(`/api/models/${modelId}/recordings`);
+    },
+
+    // ========================================================================
+    // ONNX Export
+    // ========================================================================
+
+    /**
+     * Check ONNX export status for a model
+     * @param {string} modelId - Model ID
+     * @returns {Promise<object>} ONNX status
+     */
+    async getOnnxStatus(modelId) {
+        return this.get(`/api/models/${modelId}/onnx-status`);
+    },
+
+    /**
+     * Export model to ONNX format
+     * @param {string} modelId - Model ID
+     * @returns {Promise<object>} Export result
+     */
+    async exportToOnnx(modelId) {
+        return this.postForm(`/api/models/${modelId}/export-onnx`, new FormData());
+    },
+
+    /**
+     * Delete ONNX export for a model
+     * @param {string} modelId - Model ID
+     * @returns {Promise<object>} Delete result
+     */
+    async deleteOnnxExport(modelId) {
+        return this.delete(`/api/models/${modelId}/onnx`);
+    },
+
+    /**
+     * Move a custom model to the default folder
+     * @param {string} modelId - Model ID
+     * @returns {Promise<object>} Move result
+     */
+    async moveModelToDefault(modelId) {
+        return this.postForm(`/api/models/${modelId}/move-to-default`, new FormData());
+    },
+
+    /**
+     * Test model with audio file using ONNX
+     * @param {string} modelId - Model ID
+     * @param {Blob} audioBlob - Audio file
+     * @param {number} threshold - Detection threshold (optional)
+     * @param {boolean} useOnnx - Use ONNX model
+     * @returns {Promise<object>} Test result
+     */
+    async testWithFileOnnx(modelId, audioBlob, threshold = null, useOnnx = false) {
+        const formData = new FormData();
+        formData.append('model_id', modelId);
+        formData.append('audio_file', audioBlob, 'test.wav');
+        if (threshold !== null) {
+            formData.append('threshold', threshold);
+        }
+        formData.append('use_onnx', useOnnx);
+        return this.postForm('/api/test/file', formData);
+    },
+
+    /**
+     * Create WebSocket connection for real-time testing with ONNX support
+     * @param {string} modelId - Model ID
+     * @param {number} threshold - Detection threshold
+     * @param {number} cooldownMs - Cooldown between detections
+     * @param {boolean} noiseReduction - Enable noise reduction
+     * @param {boolean} useOnnx - Use ONNX model
+     * @returns {WebSocket} WebSocket connection
+     */
+    createTestWebSocketOnnx(modelId, threshold = 0.5, cooldownMs = 1000, noiseReduction = false, useOnnx = false) {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = window.location.host;
+        const params = new URLSearchParams({
+            model_id: modelId,
+            threshold: threshold,
+            cooldown_ms: cooldownMs,
+            noise_reduction: noiseReduction,
+            use_onnx: useOnnx,
+        });
+        return new WebSocket(`${protocol}//${host}/api/test/realtime?${params}`);
     },
 };

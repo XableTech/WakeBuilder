@@ -25,6 +25,14 @@ class App {
         this.elements.modelsGrid = document.getElementById('models-grid');
         this.elements.filterBtns = document.querySelectorAll('.filter-btn');
         this.elements.btnNewModel = document.getElementById('btn-new-model');
+        
+        // Home page cache elements
+        this.elements.homeCachePanel = document.getElementById('cache-panel-home');
+        this.elements.homeCacheStatusText = document.getElementById('home-cache-status-text');
+        this.elements.homeCacheChunkCount = document.getElementById('home-cache-chunk-count');
+        this.elements.homeBuildCacheBtn = document.getElementById('home-build-cache-btn');
+        this.elements.homeClearCacheBtn = document.getElementById('home-clear-cache-btn');
+        this.elements.cacheRequiredBadge = document.getElementById('cache-required-badge');
     }
 
     /**
@@ -51,6 +59,14 @@ class App {
         this.elements.btnNewModel.addEventListener('click', () => {
             this.navigateTo('train');
         });
+        
+        // Home page cache buttons
+        if (this.elements.homeBuildCacheBtn) {
+            this.elements.homeBuildCacheBtn.addEventListener('click', () => this.buildCache());
+        }
+        if (this.elements.homeClearCacheBtn) {
+            this.elements.homeClearCacheBtn.addEventListener('click', () => this.clearCache());
+        }
     }
 
     /**
@@ -74,10 +90,148 @@ class App {
 
         // Load initial data
         await this.loadModels();
+        
+        // Check cache status and warn if missing
+        await this.checkCacheStatus();
+        
+        // Check for orphaned recordings on startup
+        this.checkOrphanedRecordings();
 
         console.log('WakeBuilder initialized');
     }
-
+    
+    /**
+     * Check cache status and update home page cache panel
+     */
+    async checkCacheStatus() {
+        try {
+            const status = await api.getCacheStatus();
+            console.log('Cache status:', status);
+            
+            this.updateHomeCacheDisplay(status);
+        } catch (error) {
+            console.error('Failed to check cache status:', error);
+            if (this.elements.homeCacheStatusText) {
+                this.elements.homeCacheStatusText.textContent = 'Failed to load cache info';
+            }
+        }
+    }
+    
+    /**
+     * Update home page cache display
+     * @param {object} status - Cache status from API
+     */
+    updateHomeCacheDisplay(status) {
+        const sourceFiles = status.source_files?.total || 0;
+        const chunkCount = status.audio_cache?.chunk_count || 0;
+        const specCount = status.spectrogram_cache?.count || 0;
+        const isReady = status.training_ready;
+        
+        // Update panel styling
+        if (this.elements.homeCachePanel) {
+            this.elements.homeCachePanel.classList.remove('cache-missing', 'cache-ready');
+            this.elements.homeCachePanel.classList.add(isReady ? 'cache-ready' : 'cache-missing');
+        }
+        
+        // Update badge
+        if (this.elements.cacheRequiredBadge) {
+            this.elements.cacheRequiredBadge.textContent = isReady ? 'Ready' : 'Required';
+        }
+        
+        // Update status text
+        if (this.elements.homeCacheStatusText) {
+            this.elements.homeCacheStatusText.textContent = `${sourceFiles.toLocaleString()} source files`;
+        }
+        
+        // Update chunk count
+        if (this.elements.homeCacheChunkCount) {
+            if (isReady) {
+                if (specCount > 0) {
+                    this.elements.homeCacheChunkCount.textContent = `${chunkCount.toLocaleString()} chunks, ${specCount.toLocaleString()} spectrograms ✓`;
+                } else {
+                    this.elements.homeCacheChunkCount.textContent = `${chunkCount.toLocaleString()} chunks ready ✓`;
+                }
+                this.elements.homeCacheChunkCount.style.color = 'var(--color-success)';
+            } else {
+                this.elements.homeCacheChunkCount.textContent = '⚠️ No cache - Build required before training!';
+                this.elements.homeCacheChunkCount.style.color = 'var(--color-warning)';
+            }
+        }
+        
+        // Toggle button states based on cache existence
+        if (this.elements.homeBuildCacheBtn) {
+            this.elements.homeBuildCacheBtn.disabled = isReady;
+        }
+        if (this.elements.homeClearCacheBtn) {
+            this.elements.homeClearCacheBtn.disabled = !isReady;
+        }
+    }
+    
+    /**
+     * Build cache from home page
+     */
+    async buildCache() {
+        if (!this.elements.homeBuildCacheBtn) return;
+        
+        const originalText = this.elements.homeBuildCacheBtn.textContent;
+        this.elements.homeBuildCacheBtn.textContent = 'Building...';
+        this.elements.homeBuildCacheBtn.disabled = true;
+        if (this.elements.homeClearCacheBtn) {
+            this.elements.homeClearCacheBtn.disabled = true;
+        }
+        
+        try {
+            await api.buildAllCaches((event) => {
+                if (event.type === 'start') {
+                    const phase = event.phase || 'audio';
+                    if (this.elements.homeCacheStatusText) {
+                        this.elements.homeCacheStatusText.textContent = `Building ${phase} cache...`;
+                    }
+                } else if (event.type === 'progress') {
+                    const phase = event.phase || 'audio';
+                    const percent = event.percent || 0;
+                    if (this.elements.homeCacheStatusText) {
+                        this.elements.homeCacheStatusText.textContent = `Building ${phase} cache... ${percent}%`;
+                    }
+                    if (event.processed && event.total && this.elements.homeCacheChunkCount) {
+                        this.elements.homeCacheChunkCount.textContent = `${event.processed}/${event.total} files`;
+                    }
+                } else if (event.type === 'complete') {
+                    showToast('Cache built successfully!', 'success');
+                }
+            });
+            
+            // Refresh cache status
+            await this.checkCacheStatus();
+            
+        } catch (error) {
+            console.error('Failed to build cache:', error);
+            showToast('Failed to build cache: ' + error.message, 'error');
+        } finally {
+            this.elements.homeBuildCacheBtn.textContent = originalText;
+            this.elements.homeBuildCacheBtn.disabled = false;
+            if (this.elements.homeClearCacheBtn) {
+                this.elements.homeClearCacheBtn.disabled = false;
+            }
+        }
+    }
+    
+    /**
+     * Clear cache from home page
+     */
+    async clearCache() {
+        if (!confirm('Clear all cached data (audio chunks and spectrograms)?')) return;
+        
+        try {
+            await api.clearAllCaches();
+            await this.checkCacheStatus();
+            showToast('Cache cleared', 'success');
+        } catch (error) {
+            console.error('Failed to clear cache:', error);
+            showToast('Failed to clear cache: ' + error.message, 'error');
+        }
+    }
+    
     /**
      * Navigate to a page
      * @param {string} page - Page name (home, train, test)
@@ -229,10 +383,13 @@ class App {
                         Download
                     </button>
                     ${model.category === 'custom' ? `
-                        <button class="btn btn-secondary btn-delete" data-model-id="${model.model_id}">
-                            Delete
+                        <button class="btn btn-secondary btn-move-default" data-model-id="${model.model_id}" title="Move to Default">
+                            ⭐
                         </button>
                     ` : ''}
+                    <button class="btn btn-secondary btn-delete" data-model-id="${model.model_id}">
+                        Delete
+                    </button>
                 </div>
             </div>
         `;
@@ -260,12 +417,21 @@ class App {
             });
         });
 
-        // Download buttons
-        document.querySelectorAll('.btn-download').forEach(btn => {
+        // Download buttons (only those with data-model-id attribute)
+        document.querySelectorAll('.btn-download[data-model-id]').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const modelId = btn.dataset.modelId;
-                this.downloadModel(modelId);
+                this.downloadModel(modelId, btn);
+            });
+        });
+
+        // Move to default buttons
+        document.querySelectorAll('.btn-move-default').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const modelId = btn.dataset.modelId;
+                this.moveModelToDefault(modelId);
             });
         });
 
@@ -394,12 +560,37 @@ class App {
                                     </div>
                                 </div>
                             ` : ''}
+                            <div class="detail-section" id="training-charts-section">
+                                <h3>Training History</h3>
+                                <div class="modal-charts-grid">
+                                    <div class="modal-chart-container">
+                                        <h4>Loss History</h4>
+                                        <canvas id="modal-loss-chart" width="400" height="180"></canvas>
+                                    </div>
+                                    <div class="modal-chart-container">
+                                        <h4>Accuracy & F1 History</h4>
+                                        <canvas id="modal-accuracy-chart" width="400" height="180"></canvas>
+                                    </div>
+                                </div>
+                            </div>
                             ${metadata.threshold_analysis ? `
                                 <div class="detail-section">
                                     <h3>Threshold Analysis</h3>
                                     <canvas id="modal-threshold-chart" width="500" height="200"></canvas>
                                 </div>
                             ` : ''}
+                            <div class="detail-section" id="recordings-section">
+                                <h3>Training Recordings</h3>
+                                <div id="model-recordings-list" class="recordings-list-compact">
+                                    <span class="loading-text">Loading recordings...</span>
+                                </div>
+                            </div>
+                            <div class="detail-section">
+                                <h3>ONNX Export</h3>
+                                <div id="onnx-status-container" class="onnx-status">
+                                    <span class="loading-text">Checking ONNX status...</span>
+                                </div>
+                            </div>
                         </div>
                         <div class="modal-footer">
                             <button class="btn btn-secondary" onclick="app.closeModelDetails()">Close</button>
@@ -419,8 +610,152 @@ class App {
                 chart.setData(metadata.threshold_analysis, metadata.threshold);
             }
             
+            // Load and draw training history charts
+            this.loadTrainingHistoryCharts(modelId);
+            
+            // Load recordings
+            this.loadModelRecordings(modelId);
+            
+            // Load ONNX status
+            this.loadOnnxStatus(modelId);
+            
         } catch (error) {
             showToast('Failed to load model details: ' + error.message, 'error');
+        }
+    }
+    
+    /**
+     * Load and draw training history charts for a model
+     * @param {string} modelId - Model ID
+     */
+    async loadTrainingHistoryCharts(modelId) {
+        const chartsSection = document.getElementById('training-charts-section');
+        if (!chartsSection) return;
+        
+        try {
+            const history = await api.getTrainingHistory(modelId);
+            
+            // Draw loss chart
+            const lossCanvas = document.getElementById('modal-loss-chart');
+            if (lossCanvas && history.train_loss && history.val_loss) {
+                const lossChart = new TrainingChart(lossCanvas);
+                lossChart.setData(history.train_loss, history.val_loss);
+            }
+            
+            // Draw accuracy/F1 chart
+            const accCanvas = document.getElementById('modal-accuracy-chart');
+            if (accCanvas && history.val_accuracy) {
+                const accChart = new AccuracyChart(accCanvas);
+                accChart.setData(history.val_accuracy, history.val_f1 || []);
+            }
+            
+        } catch (error) {
+            // Training history not available - hide the section
+            chartsSection.innerHTML = `
+                <h3>Training History</h3>
+                <p class="no-data-text">Training history not available for this model</p>
+            `;
+        }
+    }
+    
+    /**
+     * Load recordings for a model in the details modal
+     * @param {string} modelId - Model ID
+     */
+    async loadModelRecordings(modelId) {
+        const container = document.getElementById('model-recordings-list');
+        if (!container) return;
+        
+        try {
+            const result = await api.getModelRecordings(modelId);
+            
+            if (result.count === 0) {
+                container.innerHTML = '<span class="no-recordings">No recordings found</span>';
+                return;
+            }
+            
+            container.innerHTML = result.recordings.map(rec => `
+                <div class="recording-item-compact">
+                    <span class="recording-name">${rec.filename}</span>
+                    <span class="recording-size">${rec.size_kb.toFixed(1)} KB</span>
+                    <audio controls src="${rec.url}" preload="none"></audio>
+                </div>
+            `).join('');
+            
+        } catch (error) {
+            container.innerHTML = '<span class="error-text">Failed to load recordings</span>';
+        }
+    }
+    
+    /**
+     * Load ONNX status for a model in the details modal
+     * @param {string} modelId - Model ID
+     */
+    async loadOnnxStatus(modelId) {
+        const container = document.getElementById('onnx-status-container');
+        if (!container) return;
+        
+        try {
+            const status = await api.getOnnxStatus(modelId);
+            
+            if (status.onnx_available) {
+                container.innerHTML = `
+                    <div class="onnx-available">
+                        <span class="onnx-badge success">ONNX Available</span>
+                        <span class="onnx-size">${status.onnx_size_mb} MB</span>
+                        <button class="btn btn-sm btn-danger" onclick="app.deleteOnnxExport('${modelId}')">Delete ONNX</button>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = `
+                    <div class="onnx-not-available">
+                        <span class="onnx-badge">Not Exported</span>
+                        <button class="btn btn-sm btn-primary" onclick="app.exportToOnnx('${modelId}')">Export to ONNX</button>
+                    </div>
+                `;
+            }
+            
+        } catch (error) {
+            container.innerHTML = '<span class="error-text">Failed to check ONNX status</span>';
+        }
+    }
+    
+    /**
+     * Export model to ONNX format
+     * @param {string} modelId - Model ID
+     */
+    async exportToOnnx(modelId) {
+        const container = document.getElementById('onnx-status-container');
+        if (container) {
+            container.innerHTML = '<span class="loading-text">Exporting to ONNX... (this may take a minute)</span>';
+        }
+        
+        try {
+            const result = await api.exportToOnnx(modelId);
+            showToast(result.message, 'success');
+            this.loadOnnxStatus(modelId);
+            
+            // Refresh model list to update size display
+            await this.loadModels();
+        } catch (error) {
+            showToast('Failed to export to ONNX: ' + error.message, 'error');
+            this.loadOnnxStatus(modelId);
+        }
+    }
+    
+    /**
+     * Delete ONNX export for a model
+     * @param {string} modelId - Model ID
+     */
+    async deleteOnnxExport(modelId) {
+        if (!confirm('Delete ONNX export?')) return;
+        
+        try {
+            await api.deleteOnnxExport(modelId);
+            showToast('ONNX export deleted', 'success');
+            this.loadOnnxStatus(modelId);
+        } catch (error) {
+            showToast('Failed to delete ONNX export: ' + error.message, 'error');
         }
     }
 
@@ -450,14 +785,74 @@ class App {
     /**
      * Download a model
      * @param {string} modelId - Model ID
+     * @param {HTMLElement} buttonElement - Optional button element to show loading state
      */
-    async downloadModel(modelId) {
+    async downloadModel(modelId, buttonElement = null) {
+        // Guard against undefined or empty model ID
+        if (!modelId || modelId === 'undefined') {
+            console.error('Download called with invalid modelId:', modelId);
+            showToast('Error: No model selected', 'error');
+            return;
+        }
+        
+        console.log('Downloading model:', modelId);
+        
+        // Use the provided button element directly
+        const btn = buttonElement;
+        const originalContent = btn ? btn.innerHTML : null;
+        
+        // Show loading state with size info
+        if (btn) {
+            btn.innerHTML = '<span class="spinner-small"></span> Getting info...';
+            btn.disabled = true;
+        }
+        
         try {
+            // Get model metadata to show size
+            let sizeInfo = '';
+            try {
+                const metadata = await api.getModelMetadata(modelId);
+                if (metadata && metadata.size_kb) {
+                    const sizeMB = (metadata.size_kb / 1024).toFixed(1);
+                    sizeInfo = ` (${sizeMB} MB)`;
+                }
+            } catch (e) {
+                // Ignore metadata errors, proceed with download
+            }
+            
+            if (btn) {
+                btn.innerHTML = `<span class="spinner-small"></span> Preparing${sizeInfo}...`;
+            }
+            
             const blob = await api.downloadModel(modelId);
             downloadBlob(blob, `${modelId}_model.zip`);
             showToast('Model downloaded!', 'success');
         } catch (error) {
             showToast('Failed to download model: ' + error.message, 'error');
+        } finally {
+            // Restore button state
+            if (btn && originalContent) {
+                btn.innerHTML = originalContent;
+                btn.disabled = false;
+            }
+        }
+    }
+
+    /**
+     * Move a model to the default folder
+     * @param {string} modelId - Model ID
+     */
+    async moveModelToDefault(modelId) {
+        if (!confirm(`Move this model to the default folder? It will no longer be deletable from the UI.`)) {
+            return;
+        }
+
+        try {
+            await api.moveModelToDefault(modelId);
+            showToast('Model moved to default folder', 'success');
+            await this.loadModels();
+        } catch (error) {
+            showToast('Failed to move model: ' + error.message, 'error');
         }
     }
 
@@ -466,16 +861,51 @@ class App {
      * @param {string} modelId - Model ID
      */
     async deleteModel(modelId) {
-        if (!confirm(`Are you sure you want to delete this model?`)) {
+        if (!confirm(`Are you sure you want to delete this model?\nThis will also delete associated recordings.`)) {
             return;
         }
 
         try {
-            await api.deleteModel(modelId);
-            showToast('Model deleted', 'success');
+            const result = await api.deleteModel(modelId);
+            showToast(result.message || 'Model deleted', 'success');
             await this.loadModels();
+            // Check for orphaned recordings after deletion
+            this.checkOrphanedRecordings();
         } catch (error) {
             showToast('Failed to delete model: ' + error.message, 'error');
+        }
+    }
+
+    /**
+     * Check for orphaned recordings and show cleanup option if any exist
+     */
+    async checkOrphanedRecordings() {
+        try {
+            const result = await api.listOrphanedRecordings();
+            if (result.count > 0) {
+                const orphanedInfo = result.orphaned.map(r => `${r.name} (${r.file_count} files)`).join(', ');
+                if (confirm(`Found ${result.count} orphaned recording(s): ${orphanedInfo}\n\nWould you like to clean them up?`)) {
+                    await this.cleanOrphanedRecordings();
+                }
+            }
+        } catch (error) {
+            // Silently ignore - not critical
+        }
+    }
+
+    /**
+     * Clean up orphaned recordings
+     */
+    async cleanOrphanedRecordings() {
+        try {
+            const result = await api.cleanOrphanedRecordings();
+            if (result.count > 0) {
+                showToast(`Cleaned up ${result.count} orphaned recording(s)`, 'success');
+            } else {
+                showToast('No orphaned recordings to clean', 'info');
+            }
+        } catch (error) {
+            showToast('Failed to clean orphaned recordings: ' + error.message, 'error');
         }
     }
 }

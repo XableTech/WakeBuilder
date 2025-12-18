@@ -1269,11 +1269,44 @@ body {
     justify-content: center;
 }
 
+/* Detection Counter */
+.detection-counter-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--spacing-lg);
+}
+
+.detection-counter {
+    font-size: 4rem;
+    font-weight: 700;
+    color: var(--color-primary);
+    line-height: 1;
+    transition: transform 0.2s ease, color 0.2s ease;
+}
+
+.detection-counter.pulse {
+    transform: scale(1.2);
+    color: var(--color-success);
+}
+
+.detection-counter-label {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    margin-top: var(--spacing-sm);
+}
+
 .detection-log {
     max-height: 200px;
     overflow-y: auto;
     font-family: monospace;
     font-size: 0.8125rem;
+}
+
+.log-entry.session-summary {
+    background-color: rgba(99, 102, 241, 0.1);
+    border-left: 3px solid var(--color-primary);
+    font-weight: 500;
 }
 
 .log-empty {
@@ -1450,10 +1483,37 @@ body {
     color: var(--text-primary);
 }
 
-#modal-threshold-chart {
+#modal-threshold-chart,
+#modal-loss-chart,
+#modal-accuracy-chart {
     width: 100%;
-    height: 200px;
-    margin-top: var(--spacing-md);
+    height: 180px;
+    margin-top: var(--spacing-sm);
+}
+
+.modal-charts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-lg);
+}
+
+.modal-chart-container {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md);
+}
+
+.modal-chart-container h4 {
+    margin: 0 0 var(--spacing-sm) 0;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+}
+
+.no-data-text {
+    color: var(--text-muted);
+    font-style: italic;
+    text-align: center;
+    padding: var(--spacing-lg);
 }
 
 .config-grid {
@@ -1545,4 +1605,232 @@ body {
     .performance-grid {
         grid-template-columns: 1fr;
     }
+}
+
+/* ============================================================================
+   Recordings List (Compact)
+   ============================================================================ */
+
+.recordings-list-compact {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.recording-item-compact {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--bg-tertiary);
+    border-radius: var(--border-radius);
+}
+
+.recording-item-compact .recording-name {
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    min-width: 120px;
+}
+
+.recording-item-compact .recording-size {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    min-width: 60px;
+}
+
+.recording-item-compact audio {
+    height: 28px;
+    flex: 1;
+}
+
+.no-recordings,
+.error-text,
+.loading-text {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    padding: var(--spacing-sm);
+}
+
+.error-text {
+    color: var(--color-error);
+}
+
+/* ============================================================================
+   ONNX Status
+   ============================================================================ */
+
+.onnx-status {
+    padding: var(--spacing-sm);
+}
+
+.onnx-available,
+.onnx-not-available {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    flex-wrap: wrap;
+}
+
+.onnx-badge {
+    display: inline-block;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-radius: var(--border-radius);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+
+.onnx-badge.success {
+    background: rgba(34, 197, 94, 0.2);
+    color: var(--color-success);
+}
+
+.onnx-size {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+}
+
+/* Small button variant */
+.btn-sm {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    font-size: 0.75rem;
+}
+
+/* ============================================================================
+   Cache Progress
+   ============================================================================ */
+
+.cache-info-panel {
+    background: var(--bg-tertiary);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-md);
+    margin-bottom: var(--spacing-md);
+}
+
+.cache-status {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-sm);
+}
+
+.cache-count {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+}
+
+.cache-count.no-cache {
+    color: var(--color-warning);
+}
+
+.cache-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+}
+
+/* Elapsed time display */
+.elapsed-time {
+    margin-left: var(--spacing-md);
+    color: var(--text-muted);
+    font-size: 0.875rem;
+}
+
+/* Cache warning banner */
+.cache-warning-banner {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid var(--color-warning);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-md);
+    margin-bottom: var(--spacing-lg);
+}
+
+.cache-warning-content {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    flex-wrap: wrap;
+}
+
+.cache-warning-icon {
+    font-size: 1.25rem;
+}
+
+.cache-warning-text {
+    flex: 1;
+    color: var(--color-warning);
+    font-weight: 500;
+}
+
+.cache-warning-dismiss {
+    opacity: 0.7;
+}
+
+.cache-warning-dismiss:hover {
+    opacity: 1;
+}
+
+/* Prominent Cache Panel */
+.cache-panel-prominent {
+    background: var(--bg-tertiary);
+    border: 2px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    padding: var(--spacing-lg);
+    margin: var(--spacing-lg) 0;
+}
+
+.cache-panel-prominent h4 {
+    margin: 0 0 var(--spacing-sm) 0;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.cache-panel-prominent.cache-missing {
+    border-color: var(--color-warning);
+    background: rgba(245, 158, 11, 0.1);
+}
+
+.cache-panel-prominent.cache-ready {
+    border-color: var(--color-success);
+}
+
+.required-badge {
+    font-size: 0.7rem;
+    background: var(--color-warning);
+    color: var(--bg-primary);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.cache-panel-prominent.cache-ready .required-badge {
+    background: var(--color-success);
+}
+
+.cache-description {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    margin-bottom: var(--spacing-md);
+}
+
+/* Small spinner for buttons */
+.spinner-small {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.75s linear infinite;
+    vertical-align: middle;
+    margin-right: 4px;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
 }

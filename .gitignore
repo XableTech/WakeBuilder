@@ -132,4 +132,13 @@ celerybeat.pid
 
 .windsurf/
 
+# Cache data (large files, generated on demand)
 data/cache/*
+
+# User recordings (stored per model, excluded from git)
+recordings/*
+!recordings/.gitkeep
+
+# ONNX models
+models/**/*.onnx
+models/**/*.onnx.data

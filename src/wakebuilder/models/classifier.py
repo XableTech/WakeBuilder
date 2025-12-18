@@ -58,6 +58,86 @@ class SelfAttentionPooling(nn.Module):
         return x.squeeze(1)  # (batch, embedding_dim)
 
 
+class SqueezeExcitation(nn.Module):
+    """
+    Squeeze-and-Excitation (SE) block for channel attention.
+    
+    This learns to emphasize important features and suppress less useful ones
+    by modeling channel interdependencies. Particularly effective after
+    attention layers to refine feature selection.
+    
+    Reference: Hu et al., "Squeeze-and-Excitation Networks" (CVPR 2018)
+    
+    Args:
+        dim: Input/output dimension
+        reduction: Reduction ratio for the bottleneck (default: 4)
+    """
+    
+    def __init__(self, dim: int, reduction: int = 4):
+        super().__init__()
+        reduced_dim = max(dim // reduction, 32)  # Minimum 32 to avoid too small
+        self.fc = nn.Sequential(
+            nn.Linear(dim, reduced_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(reduced_dim, dim),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, dim)
+        scale = self.fc(x)
+        return x * scale
+
+
+class TemporalConvBlock(nn.Module):
+    """
+    Temporal Convolutional Network (TCN) block for capturing local patterns.
+    
+    This applies 1D convolutions to capture local temporal patterns in the
+    embedding space that attention might miss. Uses dilated convolutions
+    for larger receptive fields without increasing parameters.
+    
+    Reference: Bai et al., "An Empirical Evaluation of Generic Convolutional
+    and Recurrent Networks for Sequence Modeling" (2018)
+    
+    Args:
+        dim: Input/output dimension
+        kernel_size: Convolution kernel size (default: 3)
+        dilation: Dilation factor for larger receptive field (default: 1)
+    """
+    
+    def __init__(self, dim: int, kernel_size: int = 3, dilation: int = 1):
+        super().__init__()
+        padding = (kernel_size - 1) * dilation // 2
+        
+        # Use LayerNorm instead of BatchNorm to handle batch size 1
+        self.conv = nn.Sequential(
+            nn.Conv1d(dim, dim, kernel_size, padding=padding, dilation=dilation),
+            nn.GroupNorm(1, dim),  # GroupNorm with 1 group = LayerNorm, works with batch size 1
+            nn.GELU(),
+            nn.Conv1d(dim, dim, kernel_size, padding=padding, dilation=dilation),
+            nn.GroupNorm(1, dim),
+        )
+        self.activation = nn.GELU()
+        self.dropout = nn.Dropout(0.1)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, dim)
+        # Add channel dimension for conv1d: (batch, dim, 1)
+        x_conv = x.unsqueeze(-1)
+        
+        # Apply convolution
+        out = self.conv(x_conv)
+        
+        # Residual connection
+        out = out + x_conv
+        out = self.activation(out)
+        out = self.dropout(out)
+        
+        # Remove channel dimension
+        return out.squeeze(-1)
+
+
 class WakeWordClassifier(nn.Module):
     """
     Wake word classifier head that sits on top of AST embeddings.
@@ -66,12 +146,14 @@ class WakeWordClassifier(nn.Module):
     connections that takes AST embeddings and outputs binary classification.
     
     Architecture:
-        Input (768) -> LayerNorm -> [Optional: SelfAttention] ->
-        Linear(256) -> GELU -> Dropout -> Linear(128) -> GELU -> Dropout -> Linear(2)
+        Input (768) -> LayerNorm -> [Optional: SelfAttention] -> [Optional: SE Block] ->
+        [Optional: TCN] -> Linear(256) -> GELU -> Dropout -> Linear(128) -> GELU -> Dropout -> Linear(2)
     
     Enhancements over basic MLP:
     - LayerNorm on input for stable training
     - Optional self-attention for better feature discrimination
+    - Optional SE block for channel attention (emphasizes important features)
+    - Optional TCN block for local pattern capture
     - GELU activation (smoother than ReLU, better for transformers)
     - Batch normalization between layers for faster convergence
     
@@ -81,6 +163,8 @@ class WakeWordClassifier(nn.Module):
         dropout: Dropout probability
         num_classes: Number of output classes (2 for binary classification)
         use_attention: Whether to use self-attention pooling
+        use_se_block: Whether to use Squeeze-and-Excitation block
+        use_tcn: Whether to use Temporal Convolutional Network block
     """
     
     def __init__(
@@ -90,6 +174,8 @@ class WakeWordClassifier(nn.Module):
         dropout: float = 0.3,
         num_classes: int = 2,
         use_attention: bool = False,
+        use_se_block: bool = False,
+        use_tcn: bool = False,
     ):
         super().__init__()
         
@@ -100,6 +186,8 @@ class WakeWordClassifier(nn.Module):
         self.hidden_dims = hidden_dims
         self.num_classes = num_classes
         self.use_attention = use_attention
+        self.use_se_block = use_se_block
+        self.use_tcn = use_tcn
         
         # Input normalization for stable training
         self.input_norm = nn.LayerNorm(embedding_dim)
@@ -110,6 +198,18 @@ class WakeWordClassifier(nn.Module):
         else:
             self.attention = None
         
+        # Optional SE block after attention for channel refinement
+        if use_se_block:
+            self.se_block = SqueezeExcitation(embedding_dim, reduction=4)
+        else:
+            self.se_block = None
+        
+        # Optional TCN block for local pattern capture
+        if use_tcn:
+            self.tcn_block = TemporalConvBlock(embedding_dim, kernel_size=3)
+        else:
+            self.tcn_block = None
+        
         # Build classifier layers
         layers = []
         in_dim = embedding_dim
@@ -117,7 +217,7 @@ class WakeWordClassifier(nn.Module):
         for i, hidden_dim in enumerate(hidden_dims):
             layers.extend([
                 nn.Linear(in_dim, hidden_dim),
-                nn.BatchNorm1d(hidden_dim),  # Batch norm for faster convergence
+                nn.LayerNorm(hidden_dim),  # LayerNorm works with any batch size including 1
                 nn.GELU(),  # GELU works better with transformer embeddings
                 nn.Dropout(dropout),
             ])
@@ -138,7 +238,7 @@ class WakeWordClassifier(nn.Module):
                 nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.BatchNorm1d):
+            elif isinstance(m, (nn.BatchNorm1d, nn.LayerNorm, nn.GroupNorm)):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
     
@@ -159,6 +259,14 @@ class WakeWordClassifier(nn.Module):
         if self.attention is not None:
             x = self.attention(x)
         
+        # Apply SE block if enabled (after attention)
+        if self.se_block is not None:
+            x = self.se_block(x)
+        
+        # Apply TCN block if enabled
+        if self.tcn_block is not None:
+            x = self.tcn_block(x)
+        
         return self.classifier(x)
 
 
@@ -178,6 +286,8 @@ class ASTWakeWordModel(nn.Module):
         classifier_hidden_dims: Hidden dimensions for classifier
         classifier_dropout: Dropout for classifier
         use_attention: Whether to use self-attention in classifier
+        use_se_block: Whether to use Squeeze-and-Excitation block
+        use_tcn: Whether to use Temporal Convolutional Network block
     """
     
     def __init__(
@@ -186,6 +296,8 @@ class ASTWakeWordModel(nn.Module):
         classifier_hidden_dims: Optional[list[int]] = None,
         classifier_dropout: float = 0.3,
         use_attention: bool = False,
+        use_se_block: bool = False,
+        use_tcn: bool = False,
     ):
         super().__init__()
         
@@ -212,9 +324,11 @@ class ASTWakeWordModel(nn.Module):
             dropout=classifier_dropout,
             num_classes=2,
             use_attention=use_attention,
+            use_se_block=use_se_block,
+            use_tcn=use_tcn,
         )
         
-        logger.info(f"Model initialized with embedding_dim={self.embedding_dim}, use_attention={use_attention}")
+        logger.info(f"Model initialized with embedding_dim={self.embedding_dim}, use_attention={use_attention}, use_se_block={use_se_block}, use_tcn={use_tcn}")
     
     def get_embeddings(self, input_values: torch.Tensor) -> torch.Tensor:
         """
@@ -427,6 +541,8 @@ def save_wake_word_model(
         'classifier_hidden_dims': model.classifier.hidden_dims,
         'classifier_dropout': getattr(model.classifier, 'dropout', 0.3),
         'use_attention': getattr(model.classifier, 'use_attention', False),
+        'use_se_block': getattr(model.classifier, 'use_se_block', False),
+        'use_tcn': getattr(model.classifier, 'use_tcn', False),
         'sample_rate': 16000,
         'model_version': '2.0',
         'base_model': AST_MODEL_CHECKPOINT,

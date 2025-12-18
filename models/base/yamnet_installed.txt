@@ -1,2 +1,0 @@
-YAMNet is installed via TensorFlow Hub
-Embedding dimension: 1024

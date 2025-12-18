@@ -43,11 +43,12 @@ class ModelLoader:
     Cached model loader for efficient inference.
 
     Keeps recently used models in memory to avoid repeated loading.
-    Supports both AST-based models (new) and legacy models.
+    Supports both AST-based models (new), legacy models, and ONNX models.
     """
 
     def __init__(self, max_cache_size: int = 3):
         self._cache: dict[str, tuple[torch.nn.Module, dict, float, str]] = {}
+        self._onnx_cache: dict[str, tuple[any, dict, float]] = {}  # ONNX session cache
         self._max_cache_size = max_cache_size
         self._current_device = "cpu"
         self._preprocessor = AudioPreprocessor()
@@ -62,19 +63,26 @@ class ModelLoader:
             )
         return self._ast_feature_extractor
 
-    def _find_model_path(self, model_id: str) -> Optional[Path]:
+    def _find_model_path(self, model_id: str, format: str = "pt") -> Optional[Path]:
         """Find the model file path."""
+        ext = f".{format}"
+        filename = f"model{ext}"
+        
         # Check custom models first
-        custom_path = Config.CUSTOM_MODELS_DIR / model_id / "model.pt"
+        custom_path = Config.CUSTOM_MODELS_DIR / model_id / filename
         if custom_path.exists():
             return custom_path
 
         # Check default models
-        default_path = Config.DEFAULT_MODELS_DIR / model_id / "model.pt"
+        default_path = Config.DEFAULT_MODELS_DIR / model_id / filename
         if default_path.exists():
             return default_path
 
         return None
+    
+    def has_onnx_model(self, model_id: str) -> bool:
+        """Check if ONNX model exists for given model_id."""
+        return self._find_model_path(model_id, "onnx") is not None
 
     def _load_metadata(self, model_id: str) -> dict:
         """Load model metadata."""
@@ -156,6 +164,8 @@ class ModelLoader:
                 classifier_hidden_dims=checkpoint.get("classifier_hidden_dims", [256, 128]),
                 classifier_dropout=checkpoint.get("classifier_dropout", 0.3),
                 use_attention=checkpoint.get("use_attention", False),
+                use_se_block=checkpoint.get("use_se_block", False),
+                use_tcn=checkpoint.get("use_tcn", False),
             )
             
             # Load classifier weights
@@ -188,6 +198,55 @@ class ModelLoader:
     def clear_cache(self) -> None:
         """Clear the model cache."""
         self._cache.clear()
+        self._onnx_cache.clear()
+    
+    def load_onnx_model(self, model_id: str) -> tuple[any, dict]:
+        """
+        Load an ONNX model by ID, using cache if available.
+        
+        Returns:
+            Tuple of (onnx_session, metadata)
+        """
+        # Check cache
+        if model_id in self._onnx_cache:
+            session, metadata, _ = self._onnx_cache[model_id]
+            self._onnx_cache[model_id] = (session, metadata, time.time())
+            return session, metadata
+        
+        # Find ONNX model path
+        onnx_path = self._find_model_path(model_id, "onnx")
+        if not onnx_path:
+            raise FileNotFoundError(f"ONNX model not found: {model_id}")
+        
+        # Load ONNX model
+        try:
+            import onnxruntime as ort
+        except ImportError:
+            raise ImportError(
+                "onnxruntime is required for ONNX inference. "
+                "Install with: pip install onnxruntime"
+            )
+        
+        # Create session with appropriate provider
+        providers = ['CPUExecutionProvider']
+        if self._current_device == "cuda":
+            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+        
+        session = ort.InferenceSession(str(onnx_path), providers=providers)
+        
+        # Load metadata
+        metadata = self._load_metadata(model_id)
+        metadata["is_onnx_model"] = True
+        metadata["is_ast_model"] = True  # ONNX models are exported from AST
+        
+        # Add to cache
+        if len(self._onnx_cache) >= self._max_cache_size:
+            oldest_id = min(self._onnx_cache.keys(), key=lambda k: self._onnx_cache[k][2])
+            del self._onnx_cache[oldest_id]
+        
+        self._onnx_cache[model_id] = (session, metadata, time.time())
+        
+        return session, metadata
 
 
 # Global model loader
@@ -469,6 +528,64 @@ def is_speech_like(audio: np.ndarray, sample_rate: int) -> tuple[bool, float]:
     return is_speech, final_score
 
 
+def run_onnx_inference(
+    session,
+    audio: np.ndarray,
+    sample_rate: int,
+    feature_extractor,
+) -> float:
+    """
+    Run inference using ONNX model.
+    
+    Args:
+        session: ONNX Runtime InferenceSession
+        audio: Audio data as numpy array
+        sample_rate: Sample rate of the audio
+        feature_extractor: AST feature extractor
+        
+    Returns:
+        Confidence score (0-1)
+    """
+    # Quick silence check
+    rms = np.sqrt(np.mean(audio ** 2))
+    if rms < 0.005:
+        return 0.0
+    
+    # Normalize audio
+    max_val = np.abs(audio).max()
+    if max_val > 0.01:
+        audio = audio / max_val * 0.9
+    
+    # Resample to 16kHz if needed
+    if sample_rate != 16000:
+        import librosa
+        audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
+    
+    # Process through AST feature extractor
+    inputs = feature_extractor(
+        audio,
+        sampling_rate=16000,
+        return_tensors="np",  # Use numpy for ONNX
+    )
+    input_values = inputs["input_values"]
+    
+    # Run ONNX inference
+    input_name = session.get_inputs()[0].name
+    output_name = session.get_outputs()[0].name
+    
+    logits = session.run([output_name], {input_name: input_values})[0]
+    
+    # Apply softmax to get probabilities
+    exp_logits = np.exp(logits - np.max(logits, axis=1, keepdims=True))
+    probs = exp_logits / np.sum(exp_logits, axis=1, keepdims=True)
+    raw_confidence = float(probs[0, 1])
+    
+    # Use raw confidence directly - trust the model's output
+    # The model was trained with real negative data (conversations, music, noise)
+    # so it should already discriminate well
+    return raw_confidence
+
+
 def run_inference(
     model: torch.nn.Module,
     audio: np.ndarray,
@@ -508,10 +625,7 @@ def run_inference(
     device = next(model.parameters()).device
 
     if is_ast_model and feature_extractor is not None:
-        # AST model inference - simplified pipeline
-        # AST is pre-trained on speech commands, so it already handles
-        # speech vs non-speech discrimination well
-        
+        # AST model inference - trust the model directly
         # Resample to 16kHz if needed
         if sample_rate != 16000:
             import librosa
@@ -529,7 +643,12 @@ def run_inference(
         with torch.inference_mode():
             outputs = model(input_values)
             probs = F.softmax(outputs, dim=1)
-            confidence = probs[0, 1].item()
+            raw_confidence = probs[0, 1].item()
+        
+        # Use raw confidence directly - trust the model's output
+        # The model was trained with real negative data (conversations, music, noise)
+        # so it should already discriminate well
+        confidence = raw_confidence
     else:
         # Legacy model inference (mel spectrogram based)
         # Keep the speech detection for legacy models
@@ -590,6 +709,10 @@ Test a wake word model with an uploaded audio file.
 - Duration: 0.5-3.0 seconds
 - Sample rate: Any (will be resampled to 16kHz)
 
+**Model Format:**
+- Set `use_onnx=true` to use ONNX model (if available)
+- Default uses PyTorch (.pt) model
+
 Returns detection result with confidence score.
 """,
 )
@@ -599,20 +722,35 @@ async def test_with_file(
     threshold: Optional[float] = Form(
         None, ge=0, le=1, description="Custom threshold (uses model default if not set)"
     ),
+    use_onnx: bool = Form(False, description="Use ONNX model if available"),
 ) -> TestFileResponse:
     """
     Test a model with an uploaded audio file.
 
     Returns whether the wake word was detected and the confidence score.
+    Supports both PyTorch (.pt) and ONNX (.onnx) models.
     """
     start_time = time.time()
 
     # Load model
     loader = get_model_loader()
-    try:
-        model, metadata = loader.load_model(model_id)
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+    feature_extractor = loader._get_ast_feature_extractor()
+    
+    # Determine which model format to use
+    using_onnx = False
+    if use_onnx and loader.has_onnx_model(model_id):
+        try:
+            session, metadata = loader.load_onnx_model(model_id)
+            using_onnx = True
+        except (FileNotFoundError, ImportError) as e:
+            # Fall back to PyTorch model
+            pass
+    
+    if not using_onnx:
+        try:
+            model, metadata = loader.load_model(model_id)
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
 
     # Get threshold
     if threshold is None:
@@ -645,14 +783,16 @@ async def test_with_file(
         )
 
     # Run inference
-    preprocessor = AudioPreprocessor()
-    is_ast = metadata.get("is_ast_model", True)
-    feature_extractor = loader._get_ast_feature_extractor() if is_ast else None
-    confidence = run_inference(
-        model, audio, sr, preprocessor,
-        feature_extractor=feature_extractor,
-        is_ast_model=is_ast,
-    )
+    if using_onnx:
+        confidence = run_onnx_inference(session, audio, sr, feature_extractor)
+    else:
+        preprocessor = AudioPreprocessor()
+        is_ast = metadata.get("is_ast_model", True)
+        confidence = run_inference(
+            model, audio, sr, preprocessor,
+            feature_extractor=feature_extractor,
+            is_ast_model=is_ast,
+        )
 
     # Determine detection
     detected = confidence >= threshold
@@ -679,6 +819,7 @@ async def realtime_testing(websocket: WebSocket) -> None:
     - `model_id`: ID of the model to test
     - `threshold`: Optional custom threshold (0-1)
     - `cooldown_ms`: Cooldown between detections (default: 1000)
+    - `use_onnx`: Use ONNX model if available (default: false)
 
     **Protocol:**
     1. Client sends audio chunks as binary data (16-bit PCM, 16kHz, mono)
@@ -708,6 +849,7 @@ async def realtime_testing(websocket: WebSocket) -> None:
     threshold_str = websocket.query_params.get("threshold")
     cooldown_str = websocket.query_params.get("cooldown_ms", "1000")
     noise_reduction_str = websocket.query_params.get("noise_reduction", "false")
+    use_onnx_str = websocket.query_params.get("use_onnx", "false")
 
     if not model_id:
         await websocket.close(code=4000, reason="model_id parameter required")
@@ -735,6 +877,9 @@ async def realtime_testing(websocket: WebSocket) -> None:
     # Parse noise reduction flag
     use_noise_reduction = noise_reduction_str.lower() in ("true", "1", "yes")
     
+    # Parse ONNX flag
+    use_onnx = use_onnx_str.lower() in ("true", "1", "yes")
+    
     # Import noisereduce if needed
     nr_reduce_noise = None
     if use_noise_reduction:
@@ -750,17 +895,32 @@ async def realtime_testing(websocket: WebSocket) -> None:
 
     # Load model
     loader = get_model_loader()
-    try:
-        model, metadata = loader.load_model(model_id)
-    except FileNotFoundError:
-        await websocket.send_json(
-            {
-                "type": "error",
-                "message": f"Model not found: {model_id}",
-            }
-        )
-        await websocket.close(code=4004)
-        return
+    feature_extractor = loader._get_ast_feature_extractor()
+    
+    # Determine which model format to use
+    using_onnx = False
+    onnx_session = None
+    model = None
+    
+    if use_onnx and loader.has_onnx_model(model_id):
+        try:
+            onnx_session, metadata = loader.load_onnx_model(model_id)
+            using_onnx = True
+        except (FileNotFoundError, ImportError):
+            pass
+    
+    if not using_onnx:
+        try:
+            model, metadata = loader.load_model(model_id)
+        except FileNotFoundError:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": f"Model not found: {model_id}",
+                }
+            )
+            await websocket.close(code=4004)
+            return
 
     # Get threshold from metadata if not provided
     if threshold is None:
@@ -775,6 +935,7 @@ async def realtime_testing(websocket: WebSocket) -> None:
             "threshold": threshold,
             "cooldown_ms": cooldown_ms,
             "noise_reduction": use_noise_reduction,
+            "using_onnx": using_onnx,
         }
     )
 
@@ -826,11 +987,16 @@ async def realtime_testing(websocket: WebSocket) -> None:
 
                     # Run inference
                     start_time = time.time()
-                    confidence = run_inference(
-                        model, chunk, sample_rate, preprocessor,
-                        feature_extractor=feature_extractor,
-                        is_ast_model=is_ast,
-                    )
+                    if using_onnx and onnx_session is not None:
+                        confidence = run_onnx_inference(
+                            onnx_session, chunk, sample_rate, feature_extractor
+                        )
+                    else:
+                        confidence = run_inference(
+                            model, chunk, sample_rate, preprocessor,
+                            feature_extractor=feature_extractor,
+                            is_ast_model=is_ast,
+                        )
                     inference_time = (time.time() - start_time) * 1000
 
                     # Check for detection with cooldown

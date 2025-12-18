@@ -62,6 +62,17 @@ class TrainingChart {
     }
 
     /**
+     * Set data directly from arrays
+     * @param {Array} trainLoss - Array of train loss values
+     * @param {Array} valLoss - Array of validation loss values
+     */
+    setData(trainLoss, valLoss) {
+        this.data.trainLoss = trainLoss;
+        this.data.valLoss = valLoss;
+        this.draw();
+    }
+
+    /**
      * Clear chart data
      */
     clear() {
@@ -231,6 +242,17 @@ class AccuracyChart {
     setHistory(history) {
         this.data.valAccuracy = history.map(h => h.val_accuracy);
         this.data.valF1 = history.map(h => h.val_f1);
+        this.draw();
+    }
+
+    /**
+     * Set data directly from arrays
+     * @param {Array} valAccuracy - Array of validation accuracy values
+     * @param {Array} valF1 - Array of validation F1 values
+     */
+    setData(valAccuracy, valF1) {
+        this.data.valAccuracy = valAccuracy;
+        this.data.valF1 = valF1 || [];
         this.draw();
     }
 

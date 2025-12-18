@@ -13,6 +13,8 @@ class TrainingWizard {
         this.recordings = [];
         this.jobId = null;
         this.pollInterval = null;
+        this.trainingStartTime = null;
+        this.elapsedTimeInterval = null;
         
         this.recorder = null;
         this.trainingChart = null;
@@ -40,11 +42,6 @@ class TrainingWizard {
         this.elements.wakeWordInput = document.getElementById('wake-word-input');
         this.elements.wakeWordError = document.getElementById('wake-word-error');
         this.elements.modelTypeSelect = document.getElementById('model-type-select');
-        // Cache elements
-        this.elements.cacheStatusText = document.getElementById('cache-status-text');
-        this.elements.cacheChunkCount = document.getElementById('cache-chunk-count');
-        this.elements.buildCacheBtn = document.getElementById('build-cache-btn');
-        this.elements.clearCacheBtn = document.getElementById('clear-cache-btn');
         
         // Data generation options
         this.elements.targetPositiveSamples = document.getElementById('target-positive-samples');
@@ -64,8 +61,11 @@ class TrainingWizard {
         
         // Model enhancements
         this.elements.useFocalLoss = document.getElementById('use-focal-loss');
+        this.elements.focalAlpha = document.getElementById('focal-alpha');
         this.elements.focalGamma = document.getElementById('focal-gamma');
         this.elements.useAttention = document.getElementById('use-attention');
+        this.elements.useSeBlock = document.getElementById('use-se-block');
+        this.elements.useTcn = document.getElementById('use-tcn');
         this.elements.classifierDims = document.getElementById('classifier-dims');
         
         this.elements.btnNextStep1 = document.getElementById('btn-next-step1');
@@ -84,6 +84,7 @@ class TrainingWizard {
         this.elements.trainingPhase = document.getElementById('training-phase');
         this.elements.progressFill = document.getElementById('progress-fill');
         this.elements.progressPercent = document.getElementById('progress-percent');
+        this.elements.elapsedTime = document.getElementById('elapsed-time');
         this.elements.hpModelType = document.getElementById('hp-model-type');
         this.elements.hpBatchSize = document.getElementById('hp-batch-size');
         this.elements.hpLearningRate = document.getElementById('hp-learning-rate');
@@ -94,6 +95,8 @@ class TrainingWizard {
         this.elements.hpFocalLoss = document.getElementById('hp-focal-loss');
         this.elements.hpFocalGamma = document.getElementById('hp-focal-gamma');
         this.elements.hpAttention = document.getElementById('hp-attention');
+        this.elements.hpSeBlock = document.getElementById('hp-se-block');
+        this.elements.hpTcn = document.getElementById('hp-tcn');
         this.elements.hpClassifierDims = document.getElementById('hp-classifier-dims');
         this.elements.currentEpoch = document.getElementById('current-epoch');
         this.elements.totalEpochs = document.getElementById('total-epochs');
@@ -168,14 +171,6 @@ class TrainingWizard {
         this.elements.btnTrainAnother.addEventListener('click', () => this.reset());
         this.elements.btnTestModel.addEventListener('click', () => this.goToTest());
         
-        // Cache events
-        if (this.elements.buildCacheBtn) {
-            this.elements.buildCacheBtn.addEventListener('click', () => this.buildCache());
-        }
-        if (this.elements.clearCacheBtn) {
-            this.elements.clearCacheBtn.addEventListener('click', () => this.clearCache());
-        }
-        
         // Show/hide negative ratio based on max negatives value
         if (this.elements.maxRealNegatives) {
             this.elements.maxRealNegatives.addEventListener('input', () => this.updateNegativeRatioVisibility());
@@ -211,11 +206,110 @@ class TrainingWizard {
         this.resultLossChart = new TrainingChart(this.elements.resultLossChartCanvas);
         this.resultAccuracyChart = new AccuracyChart(this.elements.resultAccuracyChartCanvas);
         
-        // Load cache info
-        this.loadCacheInfo();
+        // Draw initial placeholder state for all charts
+        this.trainingChart.draw();
+        this.accuracyChart.draw();
+        this.resultLossChart.draw();
+        this.resultAccuracyChart.draw();
         
         // Draw idle waveform
         drawIdleWaveform(this.elements.waveformCanvas);
+        
+        // Fetch cache status and configure dynamic limits
+        await this.initializeDataLimits();
+    }
+    
+    /**
+     * Initialize data generation limits based on available negative chunks
+     */
+    async initializeDataLimits() {
+        try {
+            const cacheStatus = await api.getCacheStatus();
+            const availableChunks = cacheStatus.audio_cache?.chunk_count || 0;
+            
+            // Store for later use
+            this.availableNegativeChunks = availableChunks;
+            
+            // Update positive samples input: min=5000, max=available chunks
+            if (this.elements.targetPositiveSamples && availableChunks > 0) {
+                this.elements.targetPositiveSamples.min = 5000;
+                this.elements.targetPositiveSamples.max = availableChunks;
+                // Update hint
+                const hint = this.elements.targetPositiveSamples.parentElement?.querySelector('.input-hint');
+                if (hint) {
+                    hint.textContent = `5000-${availableChunks} samples (based on available negative chunks)`;
+                }
+            }
+            
+            // Update max real negatives input
+            if (this.elements.maxRealNegatives && availableChunks > 0) {
+                this.elements.maxRealNegatives.max = availableChunks;
+            }
+            
+            // Bind event to update negative ratio options dynamically
+            if (this.elements.targetPositiveSamples) {
+                this.elements.targetPositiveSamples.addEventListener('input', () => this.updateNegativeRatioOptions());
+                this.updateNegativeRatioOptions(); // Initial update
+            }
+        } catch (error) {
+            console.warn('Could not fetch cache status for data limits:', error);
+        }
+    }
+    
+    /**
+     * Update negative ratio dropdown options based on positive samples and available chunks
+     */
+    updateNegativeRatioOptions() {
+        const positiveCount = parseInt(this.elements.targetPositiveSamples?.value) || 4000;
+        const availableChunks = this.availableNegativeChunks || 0;
+        
+        if (availableChunks === 0) return;
+        
+        // Calculate max ratio: available_chunks / positive_samples
+        const maxRatio = Math.floor(availableChunks / positiveCount);
+        
+        const ratioSelect = document.getElementById('negative-ratio');
+        if (!ratioSelect) return;
+        
+        // Define all possible ratio options
+        const allRatios = [
+            { value: '1.0', label: '1.0x (minimal)' },
+            { value: '1.5', label: '1.5x' },
+            { value: '2.0', label: '2.0x (recommended)' },
+            { value: '2.5', label: '2.5x' },
+            { value: '3.0', label: '3.0x (more robust)' },
+        ];
+        
+        // Get current selection
+        const currentValue = ratioSelect.value;
+        
+        // Rebuild options based on max ratio
+        ratioSelect.innerHTML = '';
+        let hasSelectedOption = false;
+        
+        for (const ratio of allRatios) {
+            if (parseFloat(ratio.value) <= maxRatio) {
+                const option = document.createElement('option');
+                option.value = ratio.value;
+                option.textContent = ratio.label;
+                if (ratio.value === currentValue) {
+                    option.selected = true;
+                    hasSelectedOption = true;
+                }
+                ratioSelect.appendChild(option);
+            }
+        }
+        
+        // If current selection is no longer valid, select the highest available
+        if (!hasSelectedOption && ratioSelect.options.length > 0) {
+            ratioSelect.options[ratioSelect.options.length - 1].selected = true;
+        }
+        
+        // Update hint with max info
+        const hint = ratioSelect.parentElement?.querySelector('.input-hint');
+        if (hint) {
+            hint.textContent = `Real negatives from cache. Max ${maxRatio}x based on ${availableChunks.toLocaleString()} chunks / ${positiveCount.toLocaleString()} positives.`;
+        }
     }
 
     /**
@@ -438,8 +532,11 @@ class TrainingWizard {
                 mixupAlpha: parseFloat(this.elements.mixupAlpha?.value) || 0.5,
                 // Model enhancements
                 useFocalLoss: this.elements.useFocalLoss?.checked ?? true,
+                focalAlpha: parseFloat(this.elements.focalAlpha?.value) || 0.25,
                 focalGamma: parseFloat(this.elements.focalGamma?.value) || 2.0,
                 useAttention: this.elements.useAttention?.checked ?? false,
+                useSeBlock: this.elements.useSeBlock?.checked ?? false,
+                useTcn: this.elements.useTcn?.checked ?? false,
                 classifierHiddenDims: classifierHiddenDims,
             };
 
@@ -461,10 +558,15 @@ class TrainingWizard {
             this.elements.hpFocalLoss.textContent = options.useFocalLoss ? 'Yes' : 'No';
             this.elements.hpFocalGamma.textContent = options.useFocalLoss ? options.focalGamma : 'N/A';
             this.elements.hpAttention.textContent = options.useAttention ? 'Yes' : 'No';
+            this.elements.hpSeBlock.textContent = options.useSeBlock ? 'Yes' : 'No';
+            this.elements.hpTcn.textContent = options.useTcn ? 'Yes' : 'No';
             this.elements.hpClassifierDims.textContent = options.classifierHiddenDims.join(', ');
 
             // Clear chart
             this.trainingChart.clear();
+
+            // Start elapsed time tracking
+            this.startElapsedTime();
 
             // Start polling for status
             this.startPolling();
@@ -475,10 +577,52 @@ class TrainingWizard {
     }
 
     /**
+     * Start elapsed time tracking
+     */
+    startElapsedTime() {
+        this.trainingStartTime = Date.now();
+        this.updateElapsedTime();
+        this.elapsedTimeInterval = setInterval(() => this.updateElapsedTime(), 1000);
+    }
+
+    /**
+     * Stop elapsed time tracking
+     */
+    stopElapsedTime() {
+        if (this.elapsedTimeInterval) {
+            clearInterval(this.elapsedTimeInterval);
+            this.elapsedTimeInterval = null;
+        }
+    }
+
+    /**
+     * Update elapsed time display
+     */
+    updateElapsedTime() {
+        if (!this.trainingStartTime || !this.elements.elapsedTime) return;
+        
+        const elapsed = Math.floor((Date.now() - this.trainingStartTime) / 1000);
+        const hours = Math.floor(elapsed / 3600);
+        const minutes = Math.floor((elapsed % 3600) / 60);
+        const seconds = elapsed % 60;
+        
+        let timeStr = '';
+        if (hours > 0) {
+            timeStr = `${hours}h ${minutes}m ${seconds}s`;
+        } else if (minutes > 0) {
+            timeStr = `${minutes}m ${seconds}s`;
+        } else {
+            timeStr = `${seconds}s`;
+        }
+        
+        this.elements.elapsedTime.textContent = `Elapsed: ${timeStr}`;
+    }
+
+    /**
      * Start polling for training status
      */
     startPolling() {
-        this.pollInterval = setInterval(() => this.pollStatus(), 1000);
+        this.pollInterval = setInterval(() => this.pollStatus(), 250);
     }
 
     /**
@@ -489,6 +633,7 @@ class TrainingWizard {
             clearInterval(this.pollInterval);
             this.pollInterval = null;
         }
+        this.stopElapsedTime();
     }
 
     /**
@@ -527,7 +672,7 @@ class TrainingWizard {
         // Update training metrics if available
         if (status.training_progress) {
             const tp = status.training_progress;
-            this.elements.currentEpoch.textContent = tp.current_epoch || 0;
+            this.elements.currentEpoch.textContent = tp.current_epoch + 1 || 0;
             this.elements.totalEpochs.textContent = tp.total_epochs || 0;
 
             // Update data stats if available
@@ -628,10 +773,119 @@ class TrainingWizard {
                 this.elements.resultParams.textContent = '-';
             }
 
+            // Load recordings for this model
+            this.loadResultRecordings(modelId);
+            
+            // Load ONNX status for this model
+            this.loadResultOnnxStatus(modelId);
+
             showToast('Training completed successfully!', 'success');
 
         } catch (error) {
             console.error('Failed to show results:', error);
+        }
+    }
+    
+    /**
+     * Load recordings for the result page
+     * @param {string} modelId - Model ID
+     */
+    async loadResultRecordings(modelId) {
+        const container = document.getElementById('result-recordings-list');
+        if (!container) return;
+        
+        try {
+            const result = await api.getModelRecordings(modelId);
+            
+            if (result.count === 0) {
+                container.innerHTML = '<span class="no-recordings">No recordings found</span>';
+                return;
+            }
+            
+            container.innerHTML = result.recordings.map(rec => `
+                <div class="recording-item-compact">
+                    <span class="recording-name">${rec.filename}</span>
+                    <span class="recording-size">${rec.size_kb.toFixed(1)} KB</span>
+                    <audio controls src="${rec.url}" preload="none"></audio>
+                </div>
+            `).join('');
+            
+        } catch (error) {
+            container.innerHTML = '<span class="error-text">Failed to load recordings</span>';
+        }
+    }
+    
+    /**
+     * Load ONNX status for the result page
+     * @param {string} modelId - Model ID
+     */
+    async loadResultOnnxStatus(modelId) {
+        const container = document.getElementById('result-onnx-status');
+        if (!container) return;
+        
+        try {
+            const status = await api.getOnnxStatus(modelId);
+            
+            if (status.onnx_available) {
+                container.innerHTML = `
+                    <div class="onnx-available">
+                        <span class="onnx-badge success">ONNX Available</span>
+                        <span class="onnx-size">${status.onnx_size_mb} MB</span>
+                        <button class="btn btn-sm btn-danger" onclick="trainer.deleteResultOnnx('${modelId}')">Delete ONNX</button>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = `
+                    <div class="onnx-not-available">
+                        <span class="onnx-badge">Not Exported</span>
+                        <button class="btn btn-sm btn-primary" onclick="trainer.exportResultOnnx('${modelId}')">Export to ONNX</button>
+                    </div>
+                `;
+            }
+            
+        } catch (error) {
+            container.innerHTML = '<span class="error-text">Failed to check ONNX status</span>';
+        }
+    }
+    
+    /**
+     * Export model to ONNX from results page
+     * @param {string} modelId - Model ID
+     */
+    async exportResultOnnx(modelId) {
+        const container = document.getElementById('result-onnx-status');
+        if (container) {
+            container.innerHTML = '<span class="loading-text">Exporting to ONNX... (this may take a minute)</span>';
+        }
+        
+        try {
+            const result = await api.exportToOnnx(modelId);
+            showToast(result.message, 'success');
+            this.loadResultOnnxStatus(modelId);
+            
+            // Refresh model list to update size display
+            if (window.app) {
+                window.app.loadModels();
+            }
+        } catch (error) {
+            showToast('Failed to export to ONNX: ' + error.message, 'error');
+            this.loadResultOnnxStatus(modelId);
+        }
+    }
+    
+    /**
+     * Delete ONNX export from results page
+     * @param {string} modelId - Model ID
+     */
+    async deleteResultOnnx(modelId) {
+        if (!confirm('Delete ONNX export?')) return;
+        
+        try {
+            await api.deleteOnnxExport(modelId);
+            showToast('ONNX export deleted', 'success');
+            this.loadResultOnnxStatus(modelId);
+        } catch (error) {
+            showToast('Failed to delete ONNX export: ' + error.message, 'error');
         }
     }
 
@@ -639,13 +893,45 @@ class TrainingWizard {
      * Download the trained model
      */
     async downloadModel() {
+        const btn = this.elements.btnDownloadModel;
+        const originalContent = btn ? btn.innerHTML : null;
+        const modelId = this.wakeWord.toLowerCase().replace(/\s+/g, '_');
+        
+        // Show loading state with size info
+        if (btn) {
+            btn.innerHTML = '<span class="spinner-small"></span> Getting info...';
+            btn.disabled = true;
+        }
+        
         try {
+            // Get model metadata to show size
+            let sizeInfo = '';
+            try {
+                const metadata = await api.getModelMetadata(modelId);
+                if (metadata && metadata.size_kb) {
+                    const sizeMB = (metadata.size_kb / 1024).toFixed(1);
+                    sizeInfo = ` (${sizeMB} MB)`;
+                }
+            } catch (e) {
+                // Ignore metadata errors, proceed with download
+            }
+            
+            if (btn) {
+                btn.innerHTML = `<span class="spinner-small"></span> Preparing${sizeInfo}...`;
+            }
+            
             const blob = await api.downloadTrainedModel(this.jobId);
-            const filename = this.wakeWord.toLowerCase().replace(/\s+/g, '_') + '_model.zip';
+            const filename = modelId + '_model.zip';
             downloadBlob(blob, filename);
             showToast('Model downloaded!', 'success');
         } catch (error) {
             showToast('Failed to download model: ' + error.message, 'error');
+        } finally {
+            // Restore button state
+            if (btn && originalContent) {
+                btn.innerHTML = originalContent;
+                btn.disabled = false;
+            }
         }
     }
 
@@ -656,12 +942,19 @@ class TrainingWizard {
         const modelId = this.wakeWord.toLowerCase().replace(/\s+/g, '_');
         // Navigate to test page and select this model
         window.app.navigateTo('test');
-        // Set model in tester after a short delay
-        setTimeout(() => {
+        // Set model in tester after ensuring models are loaded
+        const trySelectModel = async (retries = 10) => {
             if (window.tester) {
+                // Wait for models to be loaded if needed
+                if (!window.tester.models || window.tester.models.length === 0) {
+                    await window.tester.loadModels();
+                }
                 window.tester.selectModel(modelId);
+            } else if (retries > 0) {
+                setTimeout(() => trySelectModel(retries - 1), 100);
             }
-        }, 100);
+        };
+        setTimeout(() => trySelectModel(), 100);
     }
 
     /**
@@ -730,110 +1023,6 @@ class TrainingWizard {
         this.stopPolling();
         if (this.recorder) {
             this.recorder.dispose();
-        }
-    }
-    
-    // ========================================================================
-    // Cache Management
-    // ========================================================================
-    
-    /**
-     * Load and display cache info
-     */
-    async loadCacheInfo() {
-        try {
-            const info = await api.getNegativeCacheInfo();
-            this.updateCacheDisplay(info);
-        } catch (error) {
-            console.error('Failed to load cache info:', error);
-            if (this.elements.cacheStatusText) {
-                this.elements.cacheStatusText.textContent = 'Failed to load cache info';
-            }
-        }
-    }
-    
-    /**
-     * Update cache display
-     */
-    updateCacheDisplay(info) {
-        if (!this.elements.cacheStatusText || !this.elements.cacheChunkCount) return;
-        
-        if (info.cached && info.chunk_count > 0) {
-            this.elements.cacheStatusText.textContent = `${info.source_files.toLocaleString()} source files cached`;
-            this.elements.cacheChunkCount.textContent = `${info.chunk_count.toLocaleString()} chunks ready`;
-            this.elements.cacheChunkCount.classList.remove('no-cache');
-        } else {
-            this.elements.cacheStatusText.textContent = `${info.source_files.toLocaleString()} source files available`;
-            this.elements.cacheChunkCount.textContent = 'No cache (will be slow)';
-            this.elements.cacheChunkCount.classList.add('no-cache');
-        }
-    }
-    
-    /**
-     * Build the negative data cache
-     */
-    async buildCache() {
-        if (!this.elements.buildCacheBtn) return;
-        
-        const originalText = this.elements.buildCacheBtn.textContent;
-        this.elements.buildCacheBtn.textContent = 'Building...';
-        this.elements.buildCacheBtn.disabled = true;
-        
-        try {
-            const result = await api.buildNegativeCache();
-            this.elements.cacheStatusText.textContent = 'Building cache in background...';
-            this.elements.cacheChunkCount.textContent = `~${result.estimated_chunks.toLocaleString()} chunks`;
-            
-            // Poll for completion
-            this.pollCacheStatus();
-        } catch (error) {
-            console.error('Failed to build cache:', error);
-            alert('Failed to build cache: ' + error.message);
-        } finally {
-            this.elements.buildCacheBtn.textContent = originalText;
-            this.elements.buildCacheBtn.disabled = false;
-        }
-    }
-    
-    /**
-     * Poll cache status during build
-     */
-    pollCacheStatus() {
-        let pollCount = 0;
-        const maxPolls = 120; // 10 minutes max
-        
-        const poll = async () => {
-            pollCount++;
-            if (pollCount > maxPolls) return;
-            
-            try {
-                const info = await api.getNegativeCacheInfo();
-                this.updateCacheDisplay(info);
-                
-                // Keep polling if still building (chunk count increasing)
-                if (!info.cached || info.chunk_count === 0) {
-                    setTimeout(poll, 5000);
-                }
-            } catch (error) {
-                console.error('Cache poll error:', error);
-            }
-        };
-        
-        setTimeout(poll, 5000);
-    }
-    
-    /**
-     * Clear the negative data cache
-     */
-    async clearCache() {
-        if (!confirm('Clear all cached negative data chunks?')) return;
-        
-        try {
-            await api.clearNegativeCache();
-            this.loadCacheInfo();
-        } catch (error) {
-            console.error('Failed to clear cache:', error);
-            alert('Failed to clear cache: ' + error.message);
         }
     }
 }

@@ -14,6 +14,7 @@ class WakeWordTester {
         this.websocket = null;
         this.audioStreamer = null;
         this.detectionLog = [];
+        this.sessionDetectionCount = 0;  // Counter for detections in current session
         
         this.elements = {};
         this.bindElements();
@@ -33,8 +34,11 @@ class WakeWordTester {
         this.elements.confidenceValue = document.getElementById('confidence-value');
         this.elements.btnStartTest = document.getElementById('btn-start-test');
         this.elements.detectionLog = document.getElementById('detection-log');
+        this.elements.detectionCounter = document.getElementById('detection-counter');
         this.elements.deviceSelect = document.getElementById('device-select');
         this.elements.noiseReduction = document.getElementById('noise-reduction');
+        this.elements.useOnnx = document.getElementById('use-onnx');
+        this.elements.onnxModelStatus = document.getElementById('onnx-model-status');
     }
 
     /**
@@ -142,6 +146,7 @@ class WakeWordTester {
             this.selectedModel = null;
             this.elements.modelInfo.textContent = 'Select a model to begin testing';
             this.elements.btnStartTest.disabled = true;
+            this.updateOnnxStatus(null);
             return;
         }
 
@@ -159,6 +164,64 @@ class WakeWordTester {
         // Update info
         this.elements.modelInfo.textContent = `Wake word: "${this.selectedModel.wakeWord}" | Recommended threshold: ${this.threshold.toFixed(2)}`;
         this.elements.btnStartTest.disabled = false;
+        
+        // Check ONNX availability
+        this.checkOnnxAvailability(this.selectedModel.id);
+    }
+    
+    /**
+     * Check ONNX availability for selected model
+     * @param {string} modelId - Model ID
+     */
+    async checkOnnxAvailability(modelId) {
+        this.updateOnnxStatus('checking');
+        
+        try {
+            const status = await api.getOnnxStatus(modelId);
+            this.selectedModel.onnxAvailable = status.onnx_available;
+            this.updateOnnxStatus(status.onnx_available ? 'available' : 'not_available');
+        } catch (error) {
+            console.error('Failed to check ONNX status:', error);
+            this.selectedModel.onnxAvailable = false;
+            this.updateOnnxStatus('error');
+        }
+    }
+    
+    /**
+     * Update ONNX status display
+     * @param {string|null} status - Status: 'checking', 'available', 'not_available', 'error', or null
+     */
+    updateOnnxStatus(status) {
+        if (!this.elements.onnxModelStatus || !this.elements.useOnnx) return;
+        
+        switch (status) {
+            case 'checking':
+                this.elements.onnxModelStatus.textContent = 'Checking ONNX availability...';
+                this.elements.useOnnx.disabled = true;
+                break;
+            case 'available':
+                this.elements.onnxModelStatus.textContent = 'ONNX model available - can use for faster inference';
+                this.elements.onnxModelStatus.style.color = 'var(--color-success)';
+                this.elements.useOnnx.disabled = false;
+                break;
+            case 'not_available':
+                this.elements.onnxModelStatus.textContent = 'ONNX model not exported - using PyTorch model';
+                this.elements.onnxModelStatus.style.color = 'var(--text-muted)';
+                this.elements.useOnnx.disabled = true;
+                this.elements.useOnnx.checked = false;
+                break;
+            case 'error':
+                this.elements.onnxModelStatus.textContent = 'Failed to check ONNX status';
+                this.elements.onnxModelStatus.style.color = 'var(--color-error)';
+                this.elements.useOnnx.disabled = true;
+                this.elements.useOnnx.checked = false;
+                break;
+            default:
+                this.elements.onnxModelStatus.textContent = 'Select a model to check ONNX availability';
+                this.elements.onnxModelStatus.style.color = '';
+                this.elements.useOnnx.disabled = true;
+                this.elements.useOnnx.checked = false;
+        }
     }
 
     /**
@@ -211,13 +274,15 @@ class WakeWordTester {
             this.audioStreamer = new AudioStreamer();
             await this.audioStreamer.initialize();
 
-            // Connect WebSocket
+            // Connect WebSocket with ONNX option
             const noiseReduction = this.elements.noiseReduction?.checked ?? false;
-            this.websocket = api.createTestWebSocket(
+            const useOnnx = this.elements.useOnnx?.checked ?? false;
+            this.websocket = api.createTestWebSocketOnnx(
                 this.selectedModel.id,
                 this.threshold,
                 1000,
-                noiseReduction
+                noiseReduction,
+                useOnnx
             );
 
             this.websocket.onopen = () => {
@@ -273,6 +338,15 @@ class WakeWordTester {
     stopListening() {
         this.isListening = false;
 
+        // Log session summary if there were detections
+        if (this.sessionDetectionCount > 0) {
+            this.addSessionSummaryLog(this.sessionDetectionCount);
+        }
+        
+        // Reset session counter
+        this.sessionDetectionCount = 0;
+        this.updateDetectionCounter();
+
         // Stop audio streamer
         if (this.audioStreamer) {
             this.audioStreamer.dispose();
@@ -299,6 +373,51 @@ class WakeWordTester {
         this.elements.confidenceFill.style.width = '0%';
         this.elements.confidenceValue.textContent = '0%';
     }
+    
+    /**
+     * Update the detection counter display
+     */
+    updateDetectionCounter() {
+        if (this.elements.detectionCounter) {
+            this.elements.detectionCounter.textContent = this.sessionDetectionCount;
+        }
+    }
+    
+    /**
+     * Pulse the detection counter animation
+     */
+    pulseDetectionCounter() {
+        if (this.elements.detectionCounter) {
+            this.elements.detectionCounter.classList.add('pulse');
+            setTimeout(() => {
+                this.elements.detectionCounter.classList.remove('pulse');
+            }, 300);
+        }
+    }
+    
+    /**
+     * Add session summary to log
+     * @param {number} count - Number of detections in the session
+     */
+    addSessionSummaryLog(count) {
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString();
+        
+        const entry = document.createElement('div');
+        entry.className = 'log-entry session-summary';
+        entry.innerHTML = `
+            <span class="log-time">${timeStr}</span>
+            <span class="log-message">Session ended: ${count} detection${count !== 1 ? 's' : ''}</span>
+        `;
+        
+        // Remove empty state if present
+        const emptyState = this.elements.detectionLog.querySelector('.log-empty');
+        if (emptyState) {
+            emptyState.remove();
+        }
+        
+        this.elements.detectionLog.insertBefore(entry, this.elements.detectionLog.firstChild);
+    }
 
     /**
      * Handle WebSocket message
@@ -308,6 +427,18 @@ class WakeWordTester {
         switch (data.type) {
             case 'ready':
                 console.log('WebSocket ready:', data);
+                // Store which model format is being used
+                this.usingOnnx = data.using_onnx;
+                const modelFormat = data.using_onnx ? 'ONNX' : 'PyTorch';
+                this.elements.detectionIndicator.querySelector('.indicator-text').textContent = 
+                    `Listening for "${data.wake_word}" (${modelFormat})...`;
+                // Update ONNX status display if it exists
+                if (this.elements.onnxStatusText) {
+                    this.elements.onnxStatusText.textContent = data.using_onnx ? 'Using ONNX model ✓' : 'Using PyTorch model';
+                    this.elements.onnxStatusText.style.color = data.using_onnx ? 'var(--color-success)' : 'var(--text-secondary)';
+                }
+                // Show toast to confirm model format
+                showToast(`Testing with ${modelFormat} model`, 'info');
                 break;
 
             case 'detection':
@@ -344,6 +475,11 @@ class WakeWordTester {
             this.elements.detectionIndicator.classList.add('detected');
             this.elements.detectionIndicator.querySelector('.indicator-text').textContent = 
                 'DETECTED!';
+            
+            // Increment session counter
+            this.sessionDetectionCount++;
+            this.updateDetectionCounter();
+            this.pulseDetectionCounter();
             
             // Log detection
             this.addLogEntry(data);

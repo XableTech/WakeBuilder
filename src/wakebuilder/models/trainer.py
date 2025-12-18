@@ -116,7 +116,7 @@ class TrainingConfig:
     warmup_epochs: int = 10
 
     # Regularization (higher values prevent overconfidence)
-    label_smoothing: float = 0.25  # Higher smoothing prevents overconfident predictions
+    label_smoothing: float = 0.1  # Moderate smoothing allows confident predictions while preventing overfitting
     mixup_alpha: float = 0.5       # More aggressive mixup
     
     # Focal loss for hard example mining
@@ -124,8 +124,10 @@ class TrainingConfig:
     focal_alpha: float = 0.25      # Weight for positive class in focal loss
     focal_gamma: float = 2.0       # Focusing parameter (higher = more focus on hard examples)
     
-    # Classifier attention
+    # Classifier architecture enhancements
     use_attention: bool = False    # Use self-attention in classifier
+    use_se_block: bool = False     # Use Squeeze-and-Excitation block for channel attention
+    use_tcn: bool = False          # Use Temporal Convolutional Network block
 
     # Early stopping
     patience: int = 8  # 0=disabled, 1-15 epochs without improvement
@@ -145,8 +147,8 @@ class TrainingConfig:
     use_hard_negatives: bool = True  # Generate phonetically similar words as negatives
     
     # Negative ratios (when max_real_negatives=0)
-    negative_ratio: float = 1.5  # Real negatives = positives * ratio (1-3x)
-    hard_negative_ratio: float = 2.0  # Hard negatives = positives * ratio (1-3x)
+    negative_ratio: float = 2.0  # Real negatives = positives * ratio (2-3x recommended)
+    hard_negative_ratio: float = 4.0  # Hard negatives = positives * ratio (4x recommended for good discrimination)
 
     # Device
     device: str = "auto"
@@ -271,6 +273,7 @@ class ASTTrainer:
         negative_audio: list[tuple[np.ndarray, int]],
         wake_word: str,
         augment_positive: bool = True,
+        progress_callback: callable = None,
     ) -> tuple[DataLoader, DataLoader]:
         """
         Prepare training and validation data loaders.
@@ -280,11 +283,18 @@ class ASTTrainer:
             negative_audio: List of (audio, sample_rate) for negative examples
             wake_word: The wake word being trained
             augment_positive: Whether to augment positive examples
+            progress_callback: Optional callback(message, percent) for progress updates
 
         Returns:
             Tuple of (train_loader, val_loader)
         """
-        print("Preparing training data...")
+        def report_progress(message: str, percent: float = 0):
+            """Report progress to callback if available."""
+            print(message)
+            if progress_callback:
+                progress_callback(message, percent)
+        
+        report_progress("Preparing training data...", 30)
 
         train_audio: list[np.ndarray] = []
         train_labels: list[int] = []
@@ -294,7 +304,7 @@ class ASTTrainer:
         # =====================================================================
         # POSITIVE SAMPLES
         # =====================================================================
-        print(f"  Processing {len(positive_audio)} positive recordings...")
+        report_progress(f"Processing {len(positive_audio)} recordings...", 31)
 
         all_positive = []
         for audio, sr in positive_audio:
@@ -347,7 +357,7 @@ class ASTTrainer:
 
         num_train_pos = sum(1 for l in train_labels if l == 1)
         num_val_pos = sum(1 for l in val_labels if l == 1)
-        print(f"    Positive samples: {num_train_pos} train, {num_val_pos} val")
+        report_progress(f"Generated {num_train_pos + num_val_pos} positive samples", 33)
 
         # =====================================================================
         # NEGATIVE SAMPLES
@@ -378,7 +388,7 @@ class ASTTrainer:
                 if max_neg == 0:
                     max_neg = int(num_positive * self.config.negative_ratio)
 
-                print(f"  Loading real negative data (target {max_neg} for {self.config.negative_ratio}:1 ratio)...")
+                report_progress(f"Loading {max_neg} real negative samples from cache...", 35)
 
                 # Try cache first - only real audio, no TTS negatives
                 cache_info = real_neg_loader.get_cache_info()
@@ -405,8 +415,7 @@ class ASTTrainer:
                 from ..tts import TTSGenerator
                 
                 similar_words = get_phonetically_similar_words(wake_word)
-                print(f"  Generating hard negatives from {len(similar_words)} similar words...")
-                print(f"    Critical prefixes (MUST learn to reject): {similar_words[:5]}")
+                report_progress(f"Generating hard negatives from {len(similar_words)} similar words...", 37)
                 
                 tts = TTSGenerator(target_sample_rate=16000)
                 all_voices = list(tts.voice_names)
@@ -421,25 +430,36 @@ class ASTTrainer:
                 target_train_hard = int(num_train_pos * self.config.hard_negative_ratio)
                 target_val_hard = int(num_val_pos * self.config.hard_negative_ratio)
                 
-                print(f"    Target: {target_train_hard} train, {target_val_hard} val hard negatives ({self.config.hard_negative_ratio}x ratio)")
-                print(f"    Using {len(train_voices)} voices for train, {len(val_voices)} for val")
+                report_progress(f"Target: {target_train_hard + target_val_hard} hard negatives ({self.config.hard_negative_ratio}x ratio)", 38)
                 
-                # Generate samples for critical words first
-                # Pure prefixes (sa, sam, sami) are most critical - use more voices
-                # Other similar words use fewer voices
+                # Generate samples for similar words
+                # Use ALL available similar words and voices to reach target
+                # Priority: pure prefixes > suffixes > edit-distance variations
                 train_count = 0
                 val_count = 0
                 
-                for idx, word in enumerate(similar_words[:30]):  # Top 30 similar words
+                # Calculate how many words we need to process
+                # With ~10 voices per word and pitch variations, each word gives ~15-30 samples
+                # To get 20,000 samples, we need ~700-1300 words
+                max_words = min(len(similar_words), max(100, target_train_hard // 15))
+                
+                for idx, word in enumerate(similar_words[:max_words]):
                     if train_count >= target_train_hard and val_count >= target_val_hard:
                         break
                     
-                    is_critical = idx < 5  # Pure prefixes are most critical
+                    # Report progress periodically (every 10 words)
+                    if idx % 10 == 0:
+                        # Progress from 38% to 43% during synthesis
+                        progress_pct = 38 + (train_count / max(target_train_hard, 1)) * 5
+                        report_progress(f"Synthesizing similar words... ({train_count}/{target_train_hard})", min(progress_pct, 43))
                     
-                    # Use more voices for critical words, fewer for others
-                    # Critical words (pure prefixes) get ALL available voices
-                    num_train_voices = min(len(train_voices), 20 if is_critical else 5)
-                    num_val_voices_use = min(len(val_voices), 10 if is_critical else 3)
+                    # Priority tiers for voice allocation
+                    is_critical = idx < 10  # Pure prefixes are most critical
+                    is_important = idx < 50  # Next tier of importance
+                    
+                    # Use more voices for critical/important words
+                    num_train_voices = len(train_voices) if is_critical else (len(train_voices) // 2 if is_important else max(3, len(train_voices) // 4))
+                    num_val_voices_use = len(val_voices) if is_critical else (len(val_voices) // 2 if is_important else max(2, len(val_voices) // 4))
                     
                     # Training samples
                     for voice in train_voices[:num_train_voices]:
@@ -462,16 +482,31 @@ class ASTTrainer:
                                 train_hard_negatives.append(audio.astype(np.float32))
                                 train_count += 1
                                 
-                                # Critical words get pitch variations too
-                                if is_critical and train_count < target_train_hard:
+                                # Add pitch and speed variations to increase sample count
+                                if train_count < target_train_hard:
                                     try:
                                         import librosa
-                                        for shift in [-2, 2]:
+                                        # Pitch variations (more for critical words)
+                                        pitch_shifts = [-3, -1, 1, 3] if is_critical else [-2, 2]
+                                        for shift in pitch_shifts:
                                             if train_count >= target_train_hard:
                                                 break
                                             pitched = librosa.effects.pitch_shift(audio, sr=16000, n_steps=shift)
                                             train_hard_negatives.append(pitched.astype(np.float32))
                                             train_count += 1
+                                        
+                                        # Speed variations for critical words
+                                        if is_critical:
+                                            for rate in [0.9, 1.1]:
+                                                if train_count >= target_train_hard:
+                                                    break
+                                                stretched = librosa.effects.time_stretch(audio, rate=rate)
+                                                if len(stretched) > target_len:
+                                                    stretched = stretched[:target_len]
+                                                else:
+                                                    stretched = np.pad(stretched, (0, target_len - len(stretched)))
+                                                train_hard_negatives.append(stretched.astype(np.float32))
+                                                train_count += 1
                                     except Exception:
                                         pass
                         except Exception as e:
@@ -500,7 +535,7 @@ class ASTTrainer:
                         except Exception:
                             pass
                 
-                print(f"    Generated {len(train_hard_negatives)} train + {len(val_hard_negatives)} val hard negatives")
+                report_progress(f"Generated {len(train_hard_negatives) + len(val_hard_negatives)} hard negatives", 43)
                 
             except ImportError as e:
                 logger.warning(f"Hard negative generation not available: {e}")
@@ -522,11 +557,8 @@ class ASTTrainer:
         val_audio.extend(val_hard_negatives)
         val_labels.extend([0] * len(val_hard_negatives))
         
-        print(f"    Hard negatives added: {len(train_hard_negatives)} train, {len(val_hard_negatives)} val")
-
         num_train_neg = sum(1 for l in train_labels if l == 0)
         num_val_neg = sum(1 for l in val_labels if l == 0)
-        print(f"    Negative samples: {num_train_neg} train, {num_val_neg} val")
 
         # Store stats
         self.data_stats = {
@@ -537,7 +569,7 @@ class ASTTrainer:
             "num_val_samples": len(val_audio),
         }
 
-        print(f"\n  Total: {len(train_audio)} train, {len(val_audio)} val")
+        report_progress(f"Data ready: {len(train_audio)} train, {len(val_audio)} val samples", 44)
 
         # Create datasets
         train_dataset = ASTDataset(
@@ -592,6 +624,8 @@ class ASTTrainer:
             classifier_hidden_dims=self.config.classifier_hidden_dims,
             classifier_dropout=self.config.classifier_dropout,
             use_attention=self.config.use_attention,
+            use_se_block=self.config.use_se_block,
+            use_tcn=self.config.use_tcn,
         )
 
         total_params = count_parameters(model, trainable_only=False)
@@ -601,8 +635,18 @@ class ASTTrainer:
         print(f"  Total parameters: {total_params:,}")
         print(f"  Trainable parameters: {trainable_params:,}")
         print(f"  Frozen parameters: {total_params - trainable_params:,}")
+        
+        # Print enabled enhancements
+        enhancements = []
         if self.config.use_attention:
-            print(f"  Attention: Enabled")
+            enhancements.append("Self-Attention")
+        if self.config.use_se_block:
+            enhancements.append("SE Block")
+        if self.config.use_tcn:
+            enhancements.append("TCN")
+        if enhancements:
+            print(f"  Enhancements: {', '.join(enhancements)}")
+        
         if self.config.use_focal_loss:
             print(f"  Focal Loss: gamma={self.config.focal_gamma}, alpha={self.config.focal_alpha}")
 

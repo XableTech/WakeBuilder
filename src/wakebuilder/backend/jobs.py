@@ -34,8 +34,8 @@ class JobStatus(str, Enum):
 PHASE_DESCRIPTIONS = {
     JobStatus.PENDING: "Waiting to start...",
     JobStatus.VALIDATING: "Validating audio recordings...",
-    JobStatus.AUGMENTING: "Creating voice variations...",
-    JobStatus.GENERATING_NEGATIVES: "Generating and Loading data...",
+    JobStatus.AUGMENTING: "Loading AST model and feature extractor...",
+    JobStatus.GENERATING_NEGATIVES: "Generating training data...",
     JobStatus.TRAINING: "Training the model...",
     JobStatus.CALIBRATING: "Calibrating detection threshold...",
     JobStatus.SAVING: "Saving trained model...",

@@ -14,6 +14,7 @@ SRC_ROOT = PROJECT_ROOT / "src"
 MODELS_DIR = PROJECT_ROOT / "models"
 DEFAULT_MODELS_DIR = MODELS_DIR / "default"
 CUSTOM_MODELS_DIR = MODELS_DIR / "custom"
+RECORDINGS_DIR = PROJECT_ROOT / "recordings"
 DATA_DIR = PROJECT_ROOT / "data"
 TEMP_DIR = DATA_DIR / "temp"
 TTS_VOICES_DIR = PROJECT_ROOT / "tts_voices"
@@ -111,6 +112,7 @@ class Config:
     DATA_DIR = DATA_DIR
     TEMP_DIR = TEMP_DIR
     TTS_VOICES_DIR = TTS_VOICES_DIR
+    RECORDINGS_DIR = RECORDINGS_DIR
 
     # Audio processing
     SAMPLE_RATE = AUDIO_CONFIG["sample_rate"]
@@ -183,6 +185,7 @@ def ensure_directories() -> None:
         MODELS_DIR / "base",
         DEFAULT_MODELS_DIR,
         CUSTOM_MODELS_DIR,
+        RECORDINGS_DIR,
         DATA_DIR,
         TEMP_DIR,
         TTS_VOICES_DIR,

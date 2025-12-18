@@ -390,6 +390,7 @@ class RealNegativeDataLoader:
         self,
         preprocessor,
         max_workers: int = 4,
+        progress_callback: callable = None,
     ) -> int:
         """
         Build spectrogram cache from audio cache.
@@ -397,6 +398,7 @@ class RealNegativeDataLoader:
         Args:
             preprocessor: MelSpectrogramPreprocessor instance
             max_workers: Number of parallel workers
+            progress_callback: Optional callback(processed, total) for progress updates
         
         Returns:
             Number of spectrograms cached
@@ -415,12 +417,17 @@ class RealNegativeDataLoader:
         
         # Load all audio chunks and compute spectrograms
         chunk_files = list(CACHE_DIR.glob("chunk_*.npy"))
-        print(f"Building spectrogram cache for {len(chunk_files):,} audio chunks...")
+        total_chunks = len(chunk_files)
+        print(f"Building spectrogram cache for {total_chunks:,} audio chunks...")
         
         specs = []
         for i, chunk_file in enumerate(chunk_files):
             if i % 5000 == 0 and i > 0:
-                print(f"  Processed {i:,}/{len(chunk_files):,} chunks...")
+                print(f"  Processed {i:,}/{total_chunks:,} chunks...")
+            
+            # Call progress callback every 100 chunks for responsive updates
+            if progress_callback and i % 100 == 0:
+                progress_callback(i, total_chunks)
             
             try:
                 audio = np.load(chunk_file)
@@ -428,6 +435,10 @@ class RealNegativeDataLoader:
                 specs.append(spec)
             except Exception:
                 continue
+        
+        # Final progress update
+        if progress_callback:
+            progress_callback(total_chunks, total_chunks)
         
         # Save as single numpy file (much faster to load)
         specs_array = np.stack(specs, axis=0)
@@ -615,6 +626,7 @@ class MassivePositiveAugmenter:
         self._seen_hashes: set[str] = set()
         self._noise_loader: Optional["NoiseLoader"] = None
         self._tts: Optional["TTSGenerator"] = None
+        self._kokoro_tts: Optional["KokoroTTSGenerator"] = None
     
     def _load_dependencies(self):
         """Lazy load dependencies."""
@@ -628,6 +640,54 @@ class MassivePositiveAugmenter:
                 self._tts = TTSGenerator(target_sample_rate=self.target_sr)
             except Exception:
                 self._tts = None
+        
+        if self._kokoro_tts is None:
+            try:
+                from ..tts import KokoroTTSGenerator, KOKORO_AVAILABLE
+                if KOKORO_AVAILABLE:
+                    # Ensure spacy model is installed (required by Kokoro's misaki G2P)
+                    self._ensure_spacy_model()
+                    self._kokoro_tts = KokoroTTSGenerator(
+                        target_sample_rate=self.target_sr,
+                        use_gpu=True,
+                    )
+            except Exception:
+                self._kokoro_tts = None
+    
+    def _ensure_spacy_model(self):
+        """Ensure the spacy model required by Kokoro TTS is installed."""
+        try:
+            import spacy
+            # Check if model is already installed
+            if "en_core_web_sm" in spacy.util.get_installed_models():
+                return
+            
+            print("  Installing spacy model for Kokoro TTS (first-time setup)...")
+            import subprocess
+            import sys
+            
+            # Download using spacy's download mechanism via subprocess
+            model_url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", model_url],
+                capture_output=True,
+                text=True,
+            )
+            
+            if result.returncode != 0:
+                # Try with uv pip if regular pip fails
+                result = subprocess.run(
+                    ["uv", "pip", "install", model_url],
+                    capture_output=True,
+                    text=True,
+                )
+            
+            if result.returncode == 0:
+                print("  Spacy model installed successfully")
+            else:
+                print(f"  Warning: Could not install spacy model: {result.stderr}")
+        except Exception as e:
+            print(f"  Warning: Could not verify spacy model: {e}")
     
     def _apply_time_shift(self, audio: np.ndarray, shift: int) -> np.ndarray:
         """Apply time shift to audio."""
@@ -1038,6 +1098,134 @@ class MassivePositiveAugmenter:
                         continue
             
             print(f"    TTS validation samples (unseen voices): {val_tts_count}")
+        
+        # =====================================================================
+        # Generate Kokoro TTS samples (high-quality, diverse voices)
+        # Uses ALL voices with speed (1.0, 1.5) and volume (-6, -3, 0, +3 dB) variations
+        # Split voices: 70% train, 30% validation (unseen)
+        # =====================================================================
+        if self._kokoro_tts is not None:
+            from ..tts import KOKORO_VOICES, KOKORO_SPEED_VARIATIONS, KOKORO_VOLUME_VARIATIONS
+            
+            kokoro_voices = list(KOKORO_VOICES.keys())
+            random.shuffle(kokoro_voices)
+            
+            # Split voices for train/val
+            kokoro_val_count = max(4, int(len(kokoro_voices) * 0.3))  # 30% for validation
+            kokoro_val_voices = set(kokoro_voices[:kokoro_val_count])
+            kokoro_train_voices = set(kokoro_voices[kokoro_val_count:])
+            
+            print(f"  Generating Kokoro TTS samples ({len(KOKORO_VOICES)} voices across all languages)...")
+            print(f"    Kokoro voices: {len(kokoro_train_voices)} train, {len(kokoro_val_voices)} val (unseen)")
+            print(f"    Speeds: {KOKORO_SPEED_VARIATIONS}, Volumes: {KOKORO_VOLUME_VARIATIONS} dB")
+            
+            kokoro_train_count = 0
+            kokoro_val_count = 0
+            
+            # Training samples from Kokoro (train voices only)
+            for voice_id in kokoro_train_voices:
+                for speed in KOKORO_SPEED_VARIATIONS:  # [1.0, 1.5]
+                    try:
+                        audio, _ = self._kokoro_tts.synthesize(
+                            wake_word,
+                            voice_id=voice_id,
+                            speed=speed,
+                        )
+                        audio = self._pad_or_trim(audio)
+                        
+                        # Normalize
+                        max_val = np.abs(audio).max()
+                        if max_val > 0.01:
+                            audio = audio / max_val * 0.9
+                        
+                        voice_info = KOKORO_VOICES.get(voice_id, ("Unknown", "unknown", "unknown", "a"))
+                        
+                        # Apply volume variations
+                        for volume_db in KOKORO_VOLUME_VARIATIONS:
+                            aug = self._apply_volume_change(audio.copy(), volume_db)
+                            
+                            # Check for duplicates
+                            audio_hash = compute_audio_hash(aug)
+                            if audio_hash in self._seen_hashes:
+                                continue
+                            self._seen_hashes.add(audio_hash)
+                            
+                            metadata = {
+                                "source": "kokoro_tts",
+                                "voice_id": voice_id,
+                                "voice_name": voice_info[0],
+                                "gender": voice_info[1],
+                                "accent": voice_info[2],
+                                "speed": speed,
+                                "volume_db": volume_db,
+                                "split": "train",
+                            }
+                            
+                            train_samples.append((aug, metadata))
+                            kokoro_train_count += 1
+                            
+                            # Add noisy version for some samples (30% chance)
+                            if use_noise and self._noise_loader and self._noise_loader.num_samples > 0:
+                                if random.random() < 0.3:
+                                    snr = random.choice([10, 15, 20])
+                                    noisy = self._add_noise(aug, snr)
+                                    noisy_hash = compute_audio_hash(noisy)
+                                    if noisy_hash not in self._seen_hashes:
+                                        self._seen_hashes.add(noisy_hash)
+                                        metadata_noisy = metadata.copy()
+                                        metadata_noisy["snr_db"] = snr
+                                        train_samples.append((noisy, metadata_noisy))
+                                        kokoro_train_count += 1
+                        
+                    except Exception as e:
+                        continue
+            
+            print(f"    Kokoro training samples: {kokoro_train_count}")
+            
+            # Validation samples from Kokoro (held-out voices only)
+            # Only use base volume (0 dB) for validation - no augmentation
+            for voice_id in kokoro_val_voices:
+                for speed in KOKORO_SPEED_VARIATIONS:
+                    try:
+                        audio, _ = self._kokoro_tts.synthesize(
+                            wake_word,
+                            voice_id=voice_id,
+                            speed=speed,
+                        )
+                        audio = self._pad_or_trim(audio)
+                        
+                        max_val = np.abs(audio).max()
+                        if max_val > 0.01:
+                            audio = audio / max_val * 0.9
+                        
+                        audio_hash = compute_audio_hash(audio)
+                        if audio_hash in self._seen_hashes:
+                            continue
+                        self._seen_hashes.add(audio_hash)
+                        
+                        voice_info = KOKORO_VOICES.get(voice_id, ("Unknown", "unknown", "unknown", "a"))
+                        metadata = {
+                            "source": "kokoro_tts",
+                            "voice_id": voice_id,
+                            "voice_name": voice_info[0],
+                            "gender": voice_info[1],
+                            "accent": voice_info[2],
+                            "speed": speed,
+                            "volume_db": 0,
+                            "split": "val",
+                        }
+                        
+                        val_samples.append((audio, metadata))
+                        kokoro_val_count += 1
+                        
+                    except Exception as e:
+                        continue
+            
+            print(f"    Kokoro validation samples (unseen voices): {kokoro_val_count}")
+            
+            # Cleanup Kokoro GPU memory after generation
+            self._kokoro_tts.cleanup()
+            self._kokoro_tts = None
         
         print(f"  Total: {len(train_samples)} train, {len(val_samples)} val positive samples")
         return train_samples, val_samples

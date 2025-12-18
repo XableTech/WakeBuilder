@@ -11,6 +11,7 @@ import io
 import json
 import shutil
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -136,36 +137,46 @@ def run_training_job(
             use_focal_loss=hyperparams.get("use_focal_loss", True),
             focal_alpha=hyperparams.get("focal_alpha", 0.25),
             focal_gamma=hyperparams.get("focal_gamma", 2.0),
-            # Classifier attention
+            # Classifier architecture enhancements
             use_attention=hyperparams.get("use_attention", False),
+            use_se_block=hyperparams.get("use_se_block", False),
+            use_tcn=hyperparams.get("use_tcn", False),
             # Data settings
             target_positive_samples=hyperparams.get("target_positive_samples", 4000),
             use_tts_positives=hyperparams.get("use_tts_positives", True),
             use_real_negatives=hyperparams.get("use_real_negatives", True),
             max_real_negatives=hyperparams.get("max_real_negatives", 0),
             use_hard_negatives=hyperparams.get("use_hard_negatives", True),  # Critical for accuracy
-            # Negative ratios (when max_real_negatives=0)
-            negative_ratio=hyperparams.get("negative_ratio", 1.5),
-            hard_negative_ratio=hyperparams.get("hard_negative_ratio", 2.0),
+            # Negative ratios (when max_real_negatives=0) - defaults match UI
+            negative_ratio=float(hyperparams.get("negative_ratio", 2.0)),
+            hard_negative_ratio=float(hyperparams.get("hard_negative_ratio", 4.0)),
         )
 
         output_dir = Config.CUSTOM_MODELS_DIR
         trainer = ASTTrainer(config=config, output_dir=output_dir)
 
-        # Phase 3: Data augmentation
-        job.update_status(JobStatus.AUGMENTING, "Loading AST model and preparing data...")
+        # Phase 3: Data augmentation - Loading AST model
+        job.update_status(JobStatus.AUGMENTING, "Loading AST model and feature extractor...")
 
         # Phase 4: Generate negatives (handled in prepare_data)
-        job.update_status(
-            JobStatus.GENERATING_NEGATIVES, "Generating and Loading data..."
-        )
+        # The prepare_data function will update progress via callback
+        def progress_callback(message: str, progress_percent: float = 0):
+            """Callback to update progress during data preparation."""
+            # progress_percent is the direct percentage (0-100) to show
+            # Update message and progress directly to avoid update_status overwriting progress
+            job.message = message
+            job.progress_percent = progress_percent
+            job.updated_at = datetime.now()
+        
+        job.update_status(JobStatus.GENERATING_NEGATIVES, "Starting data generation...")
 
-        # Prepare data
+        # Prepare data with progress callback
         train_loader, val_loader = trainer.prepare_data(
             positive_audio=audio_files,
             negative_audio=[],  # Will be generated
             wake_word=job.wake_word,
             augment_positive=True,
+            progress_callback=progress_callback,
         )
 
         # Store data stats in job for UI
@@ -292,6 +303,8 @@ def run_training_job(
             "use_focal_loss": config.use_focal_loss,
             "focal_gamma": config.focal_gamma,
             "use_attention": config.use_attention,
+            "use_se_block": config.use_se_block,
+            "use_tcn": config.use_tcn,
             "classifier_hidden_dims": config.classifier_hidden_dims,
             "weight_decay": config.weight_decay,
         }
@@ -460,11 +473,20 @@ async def start_training(
     use_focal_loss: Annotated[
         Optional[bool], Form(description="Use focal loss for hard example mining (default: true)")
     ] = None,
+    focal_alpha: Annotated[
+        Optional[float], Form(description="Focal loss alpha - weight for positive class (default: 0.25)", ge=0.1, le=0.9)
+    ] = None,
     focal_gamma: Annotated[
         Optional[float], Form(description="Focal loss gamma (default: 2.0)", ge=0.5, le=5.0)
     ] = None,
     use_attention: Annotated[
         Optional[bool], Form(description="Use self-attention in classifier (default: false)")
+    ] = None,
+    use_se_block: Annotated[
+        Optional[bool], Form(description="Use Squeeze-and-Excitation block for channel attention (default: false)")
+    ] = None,
+    use_tcn: Annotated[
+        Optional[bool], Form(description="Use Temporal Convolutional Network block (default: false)")
     ] = None,
     classifier_hidden_dims: Annotated[
         Optional[str], Form(description="Classifier hidden dims as JSON array (default: [256, 128])")
@@ -484,6 +506,12 @@ async def start_training(
     ] = None,
     use_hard_negatives: Annotated[
         Optional[bool], Form(description="Generate hard negatives from similar-sounding words (default: true)")
+    ] = None,
+    negative_ratio: Annotated[
+        Optional[float], Form(description="Negative:Positive ratio for real negatives (default: 2.0)", ge=0.5, le=10.0)
+    ] = None,
+    hard_negative_ratio: Annotated[
+        Optional[float], Form(description="Hard negative:Positive ratio (default: 4.0)", ge=0.5, le=10.0)
     ] = None,
 ) -> TrainingStartResponse:
     """
@@ -524,6 +552,7 @@ async def start_training(
 
     # Load and validate audio files
     audio_files: list[tuple[np.ndarray, int]] = []
+    raw_recordings: list[tuple[bytes, str]] = []  # Store raw bytes for saving
     try:
         for i, recording in enumerate(recordings):
             content = await recording.read()
@@ -532,12 +561,25 @@ async def start_training(
             try:
                 audio, sr = validate_audio_file(content, filename)
                 audio_files.append((audio, sr))
+                raw_recordings.append((content, filename))
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e)) from e
 
     except HTTPException:
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise
+    
+    # Save recordings to model-specific directory
+    model_id = wake_word.lower().replace(" ", "_")
+    recordings_dir = Config.RECORDINGS_DIR / model_id
+    recordings_dir.mkdir(parents=True, exist_ok=True)
+    
+    for i, (content, filename) in enumerate(raw_recordings):
+        # Use consistent naming: recording_001.wav, recording_002.wav, etc.
+        ext = Path(filename).suffix or ".wav"
+        save_path = recordings_dir / f"recording_{i+1:03d}{ext}"
+        with open(save_path, "wb") as f:
+            f.write(content)
 
     # Build hyperparameters with balanced defaults
     hyperparameters = {}
@@ -559,10 +601,16 @@ async def start_training(
     # Model enhancements
     if use_focal_loss is not None:
         hyperparameters["use_focal_loss"] = use_focal_loss
+    if focal_alpha is not None:
+        hyperparameters["focal_alpha"] = focal_alpha
     if focal_gamma is not None:
         hyperparameters["focal_gamma"] = focal_gamma
     if use_attention is not None:
         hyperparameters["use_attention"] = use_attention
+    if use_se_block is not None:
+        hyperparameters["use_se_block"] = use_se_block
+    if use_tcn is not None:
+        hyperparameters["use_tcn"] = use_tcn
     if classifier_hidden_dims is not None:
         try:
             hyperparameters["classifier_hidden_dims"] = json.loads(classifier_hidden_dims)
@@ -579,6 +627,10 @@ async def start_training(
         hyperparameters["max_real_negatives"] = max_real_negatives
     if use_hard_negatives is not None:
         hyperparameters["use_hard_negatives"] = use_hard_negatives
+    if negative_ratio is not None:
+        hyperparameters["negative_ratio"] = negative_ratio
+    if hard_negative_ratio is not None:
+        hyperparameters["hard_negative_ratio"] = hard_negative_ratio
 
     # Create job
     job = job_manager.create_job(
@@ -682,11 +734,14 @@ async def get_training_status(job_id: str) -> TrainingStatusResponse:
     # Convert job status to schema status (they have same values)
     schema_status = SchemaJobStatus(job.status.value)
 
+    # Use dynamic message if available, otherwise fall back to static phase description
+    current_phase = job.message if job.message else PHASE_DESCRIPTIONS.get(job.status, str(job.status))
+    
     return TrainingStatusResponse(
         job_id=job.job_id,
         status=schema_status,
         progress_percent=job.progress_percent,
-        current_phase=PHASE_DESCRIPTIONS.get(job.status, str(job.status)),
+        current_phase=current_phase,
         message=job.message,
         wake_word=job.wake_word,
         model_type=job.model_type,
