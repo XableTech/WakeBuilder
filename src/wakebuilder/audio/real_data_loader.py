@@ -627,6 +627,8 @@ class MassivePositiveAugmenter:
         self._noise_loader: Optional["NoiseLoader"] = None
         self._tts: Optional["TTSGenerator"] = None
         self._kokoro_tts: Optional["KokoroTTSGenerator"] = None
+        self._coqui_tts: Optional["CoquiTTSGenerator"] = None
+        self._edge_tts: Optional["EdgeTTSGenerator"] = None
     
     def _load_dependencies(self):
         """Lazy load dependencies."""
@@ -653,6 +655,27 @@ class MassivePositiveAugmenter:
                     )
             except Exception:
                 self._kokoro_tts = None
+        
+        if self._coqui_tts is None:
+            try:
+                from ..tts import CoquiTTSGenerator, COQUI_AVAILABLE
+                if COQUI_AVAILABLE:
+                    self._coqui_tts = CoquiTTSGenerator(
+                        target_sample_rate=self.target_sr,
+                        use_gpu=True,
+                    )
+            except Exception:
+                self._coqui_tts = None
+        
+        if self._edge_tts is None:
+            try:
+                from ..tts import EdgeTTSGenerator, EDGE_TTS_AVAILABLE
+                if EDGE_TTS_AVAILABLE:
+                    self._edge_tts = EdgeTTSGenerator(
+                        target_sample_rate=self.target_sr,
+                    )
+            except Exception:
+                self._edge_tts = None
     
     def _ensure_spacy_model(self):
         """Ensure the spacy model required by Kokoro TTS is installed."""
@@ -1226,6 +1249,127 @@ class MassivePositiveAugmenter:
             # Cleanup Kokoro GPU memory after generation
             self._kokoro_tts.cleanup()
             self._kokoro_tts = None
+        
+        # =====================================================================
+        # Generate Coqui TTS samples (VCTK 109 speakers, YourTTS multi-lingual)
+        # =====================================================================
+        if self._coqui_tts is not None:
+            from ..tts import COQUI_MODELS, COQUI_SPEED_VARIATIONS, COQUI_VOLUME_VARIATIONS
+            
+            print(f"  Generating Coqui TTS samples ({len(COQUI_MODELS)} models)...")
+            coqui_train_count = 0
+            coqui_val_count = 0
+            
+            for model_key in self._coqui_tts.model_keys:
+                speakers = self._coqui_tts.get_speakers(model_key)
+                if not speakers:
+                    continue
+                
+                # Split speakers 70/30
+                random.shuffle(speakers)
+                val_count = max(1, int(len(speakers) * 0.3))
+                val_spk = set(speakers[:val_count])
+                train_spk = set(speakers[val_count:])
+                
+                # Training samples
+                for speaker in train_spk:
+                    for speed in COQUI_SPEED_VARIATIONS:
+                        try:
+                            audio, _ = self._coqui_tts.synthesize(wake_word, model_key=model_key, speaker=speaker)
+                            audio = self._pad_or_trim(audio)
+                            max_val = np.abs(audio).max()
+                            if max_val > 0.01:
+                                audio = audio / max_val * 0.9
+                            
+                            for vol_db in COQUI_VOLUME_VARIATIONS:
+                                aug = self._apply_volume_change(audio.copy(), vol_db)
+                                h = compute_audio_hash(aug)
+                                if h in self._seen_hashes:
+                                    continue
+                                self._seen_hashes.add(h)
+                                train_samples.append((aug, {"source": "coqui_tts", "model": model_key, "speaker": speaker, "speed": speed, "vol": vol_db}))
+                                coqui_train_count += 1
+                        except Exception:
+                            continue
+                
+                # Validation samples (held-out speakers)
+                for speaker in val_spk:
+                    try:
+                        audio, _ = self._coqui_tts.synthesize(wake_word, model_key=model_key, speaker=speaker)
+                        audio = self._pad_or_trim(audio)
+                        max_val = np.abs(audio).max()
+                        if max_val > 0.01:
+                            audio = audio / max_val * 0.9
+                        h = compute_audio_hash(audio)
+                        if h not in self._seen_hashes:
+                            self._seen_hashes.add(h)
+                            val_samples.append((audio, {"source": "coqui_tts", "model": model_key, "speaker": speaker, "split": "val"}))
+                            coqui_val_count += 1
+                    except Exception:
+                        continue
+            
+            print(f"    Coqui TTS: {coqui_train_count} train, {coqui_val_count} val samples")
+            self._coqui_tts.cleanup()
+            self._coqui_tts = None
+        
+        # =====================================================================
+        # Generate Edge TTS samples (400+ voices)
+        # =====================================================================
+        if self._edge_tts is not None:
+            from ..tts import EDGE_SPEED_VARIATIONS, EDGE_VOLUME_VARIATIONS
+            
+            voices = self._edge_tts.voice_ids
+            print(f"  Generating Edge TTS samples ({len(voices)} voices)...")
+            
+            # Split voices 70/30
+            random.shuffle(voices)
+            val_count = max(5, int(len(voices) * 0.3))
+            val_voices = set(voices[:val_count])
+            train_voices = set(voices[val_count:])
+            
+            edge_train_count = 0
+            edge_val_count = 0
+            
+            # Training samples
+            for voice in train_voices:
+                for speed in EDGE_SPEED_VARIATIONS:
+                    try:
+                        audio, _ = self._edge_tts.synthesize(wake_word, voice=voice, speed=speed)
+                        audio = self._pad_or_trim(audio)
+                        max_val = np.abs(audio).max()
+                        if max_val > 0.01:
+                            audio = audio / max_val * 0.9
+                        
+                        for vol_db in EDGE_VOLUME_VARIATIONS:
+                            aug = self._apply_volume_change(audio.copy(), vol_db)
+                            h = compute_audio_hash(aug)
+                            if h in self._seen_hashes:
+                                continue
+                            self._seen_hashes.add(h)
+                            train_samples.append((aug, {"source": "edge_tts", "voice": voice, "speed": speed, "vol": vol_db}))
+                            edge_train_count += 1
+                    except Exception:
+                        continue
+            
+            # Validation samples (held-out voices)
+            for voice in val_voices:
+                try:
+                    audio, _ = self._edge_tts.synthesize(wake_word, voice=voice, speed=1.0)
+                    audio = self._pad_or_trim(audio)
+                    max_val = np.abs(audio).max()
+                    if max_val > 0.01:
+                        audio = audio / max_val * 0.9
+                    h = compute_audio_hash(audio)
+                    if h not in self._seen_hashes:
+                        self._seen_hashes.add(h)
+                        val_samples.append((audio, {"source": "edge_tts", "voice": voice, "split": "val"}))
+                        edge_val_count += 1
+                except Exception:
+                    continue
+            
+            print(f"    Edge TTS: {edge_train_count} train, {edge_val_count} val samples")
+            self._edge_tts.cleanup()
+            self._edge_tts = None
         
         print(f"  Total: {len(train_samples)} train, {len(val_samples)} val positive samples")
         return train_samples, val_samples

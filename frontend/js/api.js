@@ -22,18 +22,18 @@ const api = {
                 ...options.headers,
             },
         });
-        
+
         if (!response.ok) {
             const error = await response.json().catch(() => ({ message: response.statusText }));
             throw new Error(error.detail || error.message || 'Request failed');
         }
-        
+
         // Check if response is JSON
         const contentType = response.headers.get('content-type');
         if (contentType && contentType.includes('application/json')) {
             return response.json();
         }
-        
+
         return response;
     },
 
@@ -121,7 +121,7 @@ const api = {
         const formData = new FormData();
         formData.append('wake_word', wakeWord);
         formData.append('model_type', options.modelType || 'ast');
-        
+
         // Data generation settings
         if (options.targetPositiveSamples !== undefined) {
             formData.append('target_positive_samples', options.targetPositiveSamples);
@@ -144,7 +144,7 @@ const api = {
         if (options.useHardNegatives !== undefined) {
             formData.append('use_hard_negatives', options.useHardNegatives);
         }
-        
+
         // Training hyperparameters
         if (options.batchSize) {
             formData.append('batch_size', options.batchSize);
@@ -164,7 +164,7 @@ const api = {
         if (options.mixupAlpha !== undefined) {
             formData.append('mixup_alpha', options.mixupAlpha);
         }
-        
+
         // Model enhancements
         if (options.useFocalLoss !== undefined) {
             formData.append('use_focal_loss', options.useFocalLoss);
@@ -187,11 +187,11 @@ const api = {
         if (options.classifierHiddenDims !== undefined) {
             formData.append('classifier_hidden_dims', JSON.stringify(options.classifierHiddenDims));
         }
-        
+
         recordings.forEach((blob, index) => {
             formData.append('recordings', blob, `recording_${index + 1}.wav`);
         });
-        
+
         return this.postForm('/api/train/start', formData);
     },
 
@@ -428,6 +428,24 @@ const api = {
     async clearNegativeCache() {
         return this.delete('/api/train/negative-cache');
     },
+
+    /**
+     * Get negative data status (source files availability)
+     * @returns {Promise<object>} Negative data status
+     */
+    async getNegativeDataStatus() {
+        return this.get('/api/cache/negative-data/status');
+    },
+
+    /**
+     * Download negative data (UNAC dataset) from Kaggle
+     * @param {function} onProgress - Progress callback
+     * @returns {Promise<object>} Download result
+     */
+    async downloadNegativeData(onProgress) {
+        return this.streamSSE('/api/cache/negative-data/download', onProgress);
+    },
+
 
     /**
      * Stream SSE events from a POST endpoint

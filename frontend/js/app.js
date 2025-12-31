@@ -10,7 +10,7 @@ class App {
         this.currentPage = 'home';
         this.models = [];
         this.filter = 'all';
-        
+
         this.elements = {};
         this.bindElements();
         this.bindEvents();
@@ -25,7 +25,13 @@ class App {
         this.elements.modelsGrid = document.getElementById('models-grid');
         this.elements.filterBtns = document.querySelectorAll('.filter-btn');
         this.elements.btnNewModel = document.getElementById('btn-new-model');
-        
+
+        // Negative data panel elements
+        this.elements.negativeDataPanel = document.getElementById('negative-data-panel');
+        this.elements.negativeDataStatusText = document.getElementById('negative-data-status-text');
+        this.elements.negativeDataFileCount = document.getElementById('negative-data-file-count');
+        this.elements.downloadNegativeDataBtn = document.getElementById('download-negative-data-btn');
+
         // Home page cache elements
         this.elements.homeCachePanel = document.getElementById('cache-panel-home');
         this.elements.homeCacheStatusText = document.getElementById('home-cache-status-text');
@@ -59,13 +65,18 @@ class App {
         this.elements.btnNewModel.addEventListener('click', () => {
             this.navigateTo('train');
         });
-        
+
         // Home page cache buttons
         if (this.elements.homeBuildCacheBtn) {
             this.elements.homeBuildCacheBtn.addEventListener('click', () => this.buildCache());
         }
         if (this.elements.homeClearCacheBtn) {
             this.elements.homeClearCacheBtn.addEventListener('click', () => this.clearCache());
+        }
+
+        // Negative data download button
+        if (this.elements.downloadNegativeDataBtn) {
+            this.elements.downloadNegativeDataBtn.addEventListener('click', () => this.downloadNegativeData());
         }
     }
 
@@ -74,7 +85,7 @@ class App {
      */
     async initialize() {
         console.log('Initializing WakeBuilder...');
-        
+
         // Check API health
         try {
             const health = await api.getHealth();
@@ -90,16 +101,109 @@ class App {
 
         // Load initial data
         await this.loadModels();
-        
+
+        // Check negative data status first (required for training)
+        await this.checkNegativeDataStatus();
+
         // Check cache status and warn if missing
         await this.checkCacheStatus();
-        
+
         // Check for orphaned recordings on startup
         this.checkOrphanedRecordings();
 
         console.log('WakeBuilder initialized');
     }
-    
+
+    /**
+     * Check negative data availability and show/hide panel accordingly
+     */
+    async checkNegativeDataStatus() {
+        try {
+            const status = await api.getNegativeDataStatus();
+            console.log('Negative data status:', status);
+
+            if (!status.available || status.file_count < status.required_minimum) {
+                // Show negative data panel, hide cache panel
+                if (this.elements.negativeDataPanel) {
+                    this.elements.negativeDataPanel.style.display = 'block';
+                }
+                if (this.elements.homeCachePanel) {
+                    this.elements.homeCachePanel.style.display = 'none';
+                }
+
+                // Update status text
+                if (this.elements.negativeDataStatusText) {
+                    this.elements.negativeDataStatusText.textContent = status.available
+                        ? `Only ${status.file_count} files found (need at least ${status.required_minimum})`
+                        : 'No negative data found';
+                }
+                if (this.elements.negativeDataFileCount) {
+                    this.elements.negativeDataFileCount.textContent = `${status.file_count} files`;
+                }
+            } else {
+                // Hide negative data panel, show cache panel
+                if (this.elements.negativeDataPanel) {
+                    this.elements.negativeDataPanel.style.display = 'none';
+                }
+                if (this.elements.homeCachePanel) {
+                    this.elements.homeCachePanel.style.display = 'block';
+                }
+            }
+        } catch (error) {
+            console.error('Failed to check negative data status:', error);
+            // On error, show the cache panel as fallback
+            if (this.elements.negativeDataPanel) {
+                this.elements.negativeDataPanel.style.display = 'none';
+            }
+        }
+    }
+
+    /**
+     * Download negative data from Kaggle
+     */
+    async downloadNegativeData() {
+        if (!this.elements.downloadNegativeDataBtn) return;
+
+        const originalText = this.elements.downloadNegativeDataBtn.textContent;
+        this.elements.downloadNegativeDataBtn.textContent = 'Starting download...';
+        this.elements.downloadNegativeDataBtn.disabled = true;
+
+        try {
+            await api.downloadNegativeData((event) => {
+                if (event.type === 'start') {
+                    if (this.elements.negativeDataStatusText) {
+                        this.elements.negativeDataStatusText.textContent = event.message || 'Starting download...';
+                    }
+                } else if (event.type === 'progress') {
+                    const percent = event.percent || 0;
+                    this.elements.downloadNegativeDataBtn.textContent = `Downloading... ${percent}%`;
+                    if (this.elements.negativeDataStatusText) {
+                        this.elements.negativeDataStatusText.textContent = event.message || `Progress: ${percent}%`;
+                    }
+                } else if (event.type === 'complete') {
+                    showToast('Negative data downloaded successfully!', 'success');
+                    // Refresh status and hide panel
+                    this.checkNegativeDataStatus();
+                    this.checkCacheStatus();
+                } else if (event.type === 'error') {
+                    showToast('Download failed: ' + event.message, 'error');
+                    if (this.elements.negativeDataStatusText) {
+                        this.elements.negativeDataStatusText.textContent = 'Download failed: ' + event.message;
+                    }
+                }
+            });
+        } catch (error) {
+            console.error('Failed to download negative data:', error);
+            showToast('Failed to download negative data: ' + error.message, 'error');
+            if (this.elements.negativeDataStatusText) {
+                this.elements.negativeDataStatusText.textContent = 'Download failed: ' + error.message;
+            }
+        } finally {
+            this.elements.downloadNegativeDataBtn.textContent = originalText;
+            this.elements.downloadNegativeDataBtn.disabled = false;
+        }
+    }
+
     /**
      * Check cache status and update home page cache panel
      */
@@ -107,7 +211,7 @@ class App {
         try {
             const status = await api.getCacheStatus();
             console.log('Cache status:', status);
-            
+
             this.updateHomeCacheDisplay(status);
         } catch (error) {
             console.error('Failed to check cache status:', error);
@@ -116,7 +220,7 @@ class App {
             }
         }
     }
-    
+
     /**
      * Update home page cache display
      * @param {object} status - Cache status from API
@@ -126,23 +230,23 @@ class App {
         const chunkCount = status.audio_cache?.chunk_count || 0;
         const specCount = status.spectrogram_cache?.count || 0;
         const isReady = status.training_ready;
-        
+
         // Update panel styling
         if (this.elements.homeCachePanel) {
             this.elements.homeCachePanel.classList.remove('cache-missing', 'cache-ready');
             this.elements.homeCachePanel.classList.add(isReady ? 'cache-ready' : 'cache-missing');
         }
-        
+
         // Update badge
         if (this.elements.cacheRequiredBadge) {
             this.elements.cacheRequiredBadge.textContent = isReady ? 'Ready' : 'Required';
         }
-        
+
         // Update status text
         if (this.elements.homeCacheStatusText) {
             this.elements.homeCacheStatusText.textContent = `${sourceFiles.toLocaleString()} source files`;
         }
-        
+
         // Update chunk count
         if (this.elements.homeCacheChunkCount) {
             if (isReady) {
@@ -157,7 +261,7 @@ class App {
                 this.elements.homeCacheChunkCount.style.color = 'var(--color-warning)';
             }
         }
-        
+
         // Toggle button states based on cache existence
         if (this.elements.homeBuildCacheBtn) {
             this.elements.homeBuildCacheBtn.disabled = isReady;
@@ -166,20 +270,20 @@ class App {
             this.elements.homeClearCacheBtn.disabled = !isReady;
         }
     }
-    
+
     /**
      * Build cache from home page
      */
     async buildCache() {
         if (!this.elements.homeBuildCacheBtn) return;
-        
+
         const originalText = this.elements.homeBuildCacheBtn.textContent;
         this.elements.homeBuildCacheBtn.textContent = 'Building...';
         this.elements.homeBuildCacheBtn.disabled = true;
         if (this.elements.homeClearCacheBtn) {
             this.elements.homeClearCacheBtn.disabled = true;
         }
-        
+
         try {
             await api.buildAllCaches((event) => {
                 if (event.type === 'start') {
@@ -200,10 +304,10 @@ class App {
                     showToast('Cache built successfully!', 'success');
                 }
             });
-            
+
             // Refresh cache status
             await this.checkCacheStatus();
-            
+
         } catch (error) {
             console.error('Failed to build cache:', error);
             showToast('Failed to build cache: ' + error.message, 'error');
@@ -215,13 +319,13 @@ class App {
             }
         }
     }
-    
+
     /**
      * Clear cache from home page
      */
     async clearCache() {
         if (!confirm('Clear all cached data (audio chunks and spectrograms)?')) return;
-        
+
         try {
             await api.clearAllCaches();
             await this.checkCacheStatus();
@@ -231,7 +335,7 @@ class App {
             showToast('Failed to clear cache: ' + error.message, 'error');
         }
     }
-    
+
     /**
      * Navigate to a page
      * @param {string} page - Page name (home, train, test)
@@ -265,7 +369,7 @@ class App {
      */
     setFilter(filter) {
         this.filter = filter;
-        
+
         this.elements.filterBtns.forEach(btn => {
             btn.classList.toggle('active', btn.dataset.filter === filter);
         });
@@ -279,10 +383,10 @@ class App {
     async loadModels() {
         try {
             this.elements.modelsGrid.innerHTML = '<div class="loading-spinner">Loading models...</div>';
-            
+
             const result = await api.listModels();
             this.models = result.models || [];
-            
+
             this.renderModels();
 
         } catch (error) {
@@ -330,8 +434,8 @@ class App {
      * @returns {string} HTML string
      */
     renderModelCard(model) {
-        const accuracy = model.metrics?.val_accuracy 
-            ? formatPercent(model.metrics.val_accuracy) 
+        const accuracy = model.metrics?.val_accuracy
+            ? formatPercent(model.metrics.val_accuracy)
             : '-';
         const size = model.size_kb ? formatSize(model.size_kb) : '-';
         const date = model.created_at ? new Date(model.created_at).toLocaleDateString() : '-';
@@ -452,7 +556,7 @@ class App {
     async showModelDetails(modelId) {
         try {
             const metadata = await api.getModelMetadata(modelId);
-            
+
             // Create modal HTML
             const modalHtml = `
                 <div class="modal-overlay" id="model-details-modal">
@@ -599,31 +703,31 @@ class App {
                     </div>
                 </div>
             `;
-            
+
             // Add modal to DOM
             document.body.insertAdjacentHTML('beforeend', modalHtml);
-            
+
             // Draw threshold chart if available
             if (metadata.threshold_analysis) {
                 const canvas = document.getElementById('modal-threshold-chart');
                 const chart = new ThresholdChart(canvas);
                 chart.setData(metadata.threshold_analysis, metadata.threshold);
             }
-            
+
             // Load and draw training history charts
             this.loadTrainingHistoryCharts(modelId);
-            
+
             // Load recordings
             this.loadModelRecordings(modelId);
-            
+
             // Load ONNX status
             this.loadOnnxStatus(modelId);
-            
+
         } catch (error) {
             showToast('Failed to load model details: ' + error.message, 'error');
         }
     }
-    
+
     /**
      * Load and draw training history charts for a model
      * @param {string} modelId - Model ID
@@ -631,24 +735,24 @@ class App {
     async loadTrainingHistoryCharts(modelId) {
         const chartsSection = document.getElementById('training-charts-section');
         if (!chartsSection) return;
-        
+
         try {
             const history = await api.getTrainingHistory(modelId);
-            
+
             // Draw loss chart
             const lossCanvas = document.getElementById('modal-loss-chart');
             if (lossCanvas && history.train_loss && history.val_loss) {
                 const lossChart = new TrainingChart(lossCanvas);
                 lossChart.setData(history.train_loss, history.val_loss);
             }
-            
+
             // Draw accuracy/F1 chart
             const accCanvas = document.getElementById('modal-accuracy-chart');
             if (accCanvas && history.val_accuracy) {
                 const accChart = new AccuracyChart(accCanvas);
                 accChart.setData(history.val_accuracy, history.val_f1 || []);
             }
-            
+
         } catch (error) {
             // Training history not available - hide the section
             chartsSection.innerHTML = `
@@ -657,7 +761,7 @@ class App {
             `;
         }
     }
-    
+
     /**
      * Load recordings for a model in the details modal
      * @param {string} modelId - Model ID
@@ -665,15 +769,15 @@ class App {
     async loadModelRecordings(modelId) {
         const container = document.getElementById('model-recordings-list');
         if (!container) return;
-        
+
         try {
             const result = await api.getModelRecordings(modelId);
-            
+
             if (result.count === 0) {
                 container.innerHTML = '<span class="no-recordings">No recordings found</span>';
                 return;
             }
-            
+
             container.innerHTML = result.recordings.map(rec => `
                 <div class="recording-item-compact">
                     <span class="recording-name">${rec.filename}</span>
@@ -681,12 +785,12 @@ class App {
                     <audio controls src="${rec.url}" preload="none"></audio>
                 </div>
             `).join('');
-            
+
         } catch (error) {
             container.innerHTML = '<span class="error-text">Failed to load recordings</span>';
         }
     }
-    
+
     /**
      * Load ONNX status for a model in the details modal
      * @param {string} modelId - Model ID
@@ -694,10 +798,10 @@ class App {
     async loadOnnxStatus(modelId) {
         const container = document.getElementById('onnx-status-container');
         if (!container) return;
-        
+
         try {
             const status = await api.getOnnxStatus(modelId);
-            
+
             if (status.onnx_available) {
                 container.innerHTML = `
                     <div class="onnx-available">
@@ -714,12 +818,12 @@ class App {
                     </div>
                 `;
             }
-            
+
         } catch (error) {
             container.innerHTML = '<span class="error-text">Failed to check ONNX status</span>';
         }
     }
-    
+
     /**
      * Export model to ONNX format
      * @param {string} modelId - Model ID
@@ -729,12 +833,12 @@ class App {
         if (container) {
             container.innerHTML = '<span class="loading-text">Exporting to ONNX... (this may take a minute)</span>';
         }
-        
+
         try {
             const result = await api.exportToOnnx(modelId);
             showToast(result.message, 'success');
             this.loadOnnxStatus(modelId);
-            
+
             // Refresh model list to update size display
             await this.loadModels();
         } catch (error) {
@@ -742,14 +846,14 @@ class App {
             this.loadOnnxStatus(modelId);
         }
     }
-    
+
     /**
      * Delete ONNX export for a model
      * @param {string} modelId - Model ID
      */
     async deleteOnnxExport(modelId) {
         if (!confirm('Delete ONNX export?')) return;
-        
+
         try {
             await api.deleteOnnxExport(modelId);
             showToast('ONNX export deleted', 'success');
@@ -794,19 +898,19 @@ class App {
             showToast('Error: No model selected', 'error');
             return;
         }
-        
+
         console.log('Downloading model:', modelId);
-        
+
         // Use the provided button element directly
         const btn = buttonElement;
         const originalContent = btn ? btn.innerHTML : null;
-        
+
         // Show loading state with size info
         if (btn) {
             btn.innerHTML = '<span class="spinner-small"></span> Getting info...';
             btn.disabled = true;
         }
-        
+
         try {
             // Get model metadata to show size
             let sizeInfo = '';
@@ -819,11 +923,11 @@ class App {
             } catch (e) {
                 // Ignore metadata errors, proceed with download
             }
-            
+
             if (btn) {
                 btn.innerHTML = `<span class="spinner-small"></span> Preparing${sizeInfo}...`;
             }
-            
+
             const blob = await api.downloadModel(modelId);
             downloadBlob(blob, `${modelId}_model.zip`);
             showToast('Model downloaded!', 'success');
@@ -921,7 +1025,7 @@ function initTooltips() {
     const overlay = document.createElement('div');
     overlay.className = 'tooltip-overlay';
     document.body.appendChild(overlay);
-    
+
     // Helper to close all tooltips
     const closeAllTooltips = () => {
         document.querySelectorAll('.tooltip-content.active').forEach(t => {
@@ -929,27 +1033,27 @@ function initTooltips() {
         });
         overlay.classList.remove('active');
     };
-    
+
     // Handle tooltip icon clicks
     document.querySelectorAll('.tooltip-icon').forEach(icon => {
         icon.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
-            
+
             const tooltipId = `tooltip-${icon.dataset.tooltip}`;
             const tooltipContent = document.getElementById(tooltipId);
-            
+
             if (tooltipContent) {
                 // Close any open tooltips
                 closeAllTooltips();
-                
+
                 // Show this tooltip
                 tooltipContent.classList.add('active');
                 overlay.classList.add('active');
             }
         });
     });
-    
+
     // Handle tooltip close button clicks
     document.querySelectorAll('.tooltip-close').forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -958,10 +1062,10 @@ function initTooltips() {
             closeAllTooltips();
         });
     });
-    
+
     // Close tooltip on overlay click
     overlay.addEventListener('click', closeAllTooltips);
-    
+
     // Close tooltip on escape key
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
@@ -977,7 +1081,7 @@ document.addEventListener('DOMContentLoaded', () => {
     app = new App();
     app.initialize();
     window.app = app;
-    
+
     // Initialize tooltips
     initTooltips();
 });

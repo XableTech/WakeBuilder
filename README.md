@@ -74,6 +74,26 @@ uvicorn src.wakebuilder.backend.main:app --host 0.0.0.0 --port 8000
 # Navigate to http://localhost:8000
 ```
 
+## 📂 Negative Data Setup
+
+WakeBuilder requires negative audio samples (speech that does NOT contain your wake word) to train effective models. On first startup, the application will check if negative data is available.
+
+### Automatic Download (Recommended)
+
+If negative data is missing, the home page will display a download panel. Click **"Download Dataset"** to automatically download the UNAC (Universal Negative Audio Corpus) dataset.
+
+The download progress will be displayed with percentage completion. The dataset is approximately 500MB and will be extracted automatically to the `data/negative/` folder.
+
+### Manual Download
+
+If you prefer to download the dataset manually:
+
+1. Download the UNAC dataset from: https://www.kaggle.com/datasets/rajichisami/universal-negative-audio-corpus-unac
+2. Extract the audio files (`.wav`, `.mp3`, `.flac`, or `.ogg`)
+3. Place them in the `data/negative/` folder
+
+The application requires at least 100 audio files for training. More files (1000+) will produce better models.
+
 ## 📖 How to Use
 
 ### 1. Create a New Wake Word

@@ -375,3 +375,173 @@ async def clear_all_caches():
     loader.clear_cache()
     loader.clear_spectrogram_cache()
     return {"message": "All caches cleared", "success": True}
+
+
+# Dataset download URL (UNAC - Universal Negative Audio Corpus from Kaggle)
+NEGATIVE_DATA_DOWNLOAD_URL = "https://www.kaggle.com/api/v1/datasets/download/rajichisami/universal-negative-audio-corpus-unac"
+
+
+@router.get(
+    "/negative-data/status",
+    summary="Get Negative Data Status",
+    description="Check if negative audio data is available for training.",
+)
+async def get_negative_data_status():
+    """Get status of negative data availability."""
+    loader = RealNegativeDataLoader()
+    file_counts = loader.get_file_count()
+    negative_dir = Path(Config.DATA_DIR) / "negative"
+    
+    return {
+        "available": loader.available and file_counts["total"] > 0,
+        "file_count": file_counts["total"],
+        "directory": str(negative_dir),
+        "download_url": NEGATIVE_DATA_DOWNLOAD_URL,
+        "required_minimum": 100,  # Minimum files needed for reasonable training
+    }
+
+
+@router.post(
+    "/negative-data/download",
+    summary="Download Negative Data",
+    description="Download the UNAC dataset directly via HTTP. Returns SSE stream with progress.",
+)
+async def download_negative_data():
+    """
+    Download negative data from the UNAC dataset.
+    
+    Downloads directly via HTTP and extracts audio files to data/negative/.
+    Returns SSE stream with progress updates including percentage.
+    """
+    import tempfile
+    import zipfile
+    import requests
+    
+    negative_dir = Path(Config.DATA_DIR) / "negative"
+    
+    async def generate_progress():
+        """Generate SSE events for download progress."""
+        try:
+            yield f"data: {json.dumps({'type': 'start', 'message': 'Starting download...', 'percent': 0})}\n\n"
+            
+            # Create temp directory for download
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+                zip_path = temp_path / "unac.zip"
+                
+                try:
+                    yield f"data: {json.dumps({'type': 'progress', 'message': 'Connecting to server...', 'percent': 2})}\n\n"
+                    
+                    # Direct download without authentication
+                    response = requests.get(
+                        NEGATIVE_DATA_DOWNLOAD_URL,
+                        stream=True,
+                        timeout=600
+                    )
+                    response.raise_for_status()
+                    
+                    # Get total size for progress calculation
+                    total_size = int(response.headers.get('content-length', 0))
+                    downloaded = 0
+                    last_percent = 0
+                    
+                    total_mb = total_size // (1024 * 1024) if total_size > 0 else 0
+                    yield f"data: {json.dumps({'type': 'progress', 'message': f'Downloading... (0 MB / {total_mb} MB)', 'percent': 5})}\n\n"
+                    
+                    with open(zip_path, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=1024*1024):  # 1MB chunks
+                            if chunk:
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                                
+                                if total_size > 0:
+                                    # Download phase: 5% to 50%
+                                    percent = 5 + int((downloaded / total_size) * 45)
+                                    downloaded_mb = downloaded // (1024 * 1024)
+                                    
+                                    # Send update on every 1% change
+                                    if percent >= last_percent + 1:
+                                        last_percent = percent
+                                        yield f"data: {json.dumps({'type': 'progress', 'message': f'Downloading... ({downloaded_mb} MB / {total_mb} MB)', 'percent': percent})}\n\n"
+                                        # Flush the SSE event
+                                        await asyncio.sleep(0)
+                    
+                    # Close the response to release the connection
+                    response.close()
+                    
+                    # Small delay to ensure file is released on Windows
+                    await asyncio.sleep(0.5)
+                    
+                    yield f"data: {json.dumps({'type': 'progress', 'message': 'Download complete. Extracting files...', 'percent': 52})}\n\n"
+                    
+                except requests.exceptions.Timeout:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Download timed out after 10 minutes. Please try again.'})}\n\n"
+                    return
+                except requests.exceptions.RequestException as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'Download failed: {str(e)}'})}\n\n"
+                    return
+                
+                # Create negative directory if it doesn't exist
+                negative_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Extract zip file
+                try:
+                    extracted_count = 0
+                    with zipfile.ZipFile(zip_path, 'r') as zf:
+                        members = zf.namelist()
+                        audio_files = [m for m in members if m.lower().endswith(('.wav', '.mp3', '.flac', '.ogg'))]
+                        total_audio = len(audio_files)
+                        
+                        if total_audio == 0:
+                            yield f"data: {json.dumps({'type': 'error', 'message': 'No audio files found in the downloaded archive'})}\n\n"
+                            return
+                        
+                        yield f"data: {json.dumps({'type': 'progress', 'message': f'Extracting {total_audio} audio files...', 'percent': 55})}\n\n"
+                        
+                        last_extract_percent = 55
+                        for i, member in enumerate(audio_files):
+                            # Extract to negative folder with flat structure
+                            filename = Path(member).name
+                            if filename:  # Skip directories
+                                with zf.open(member) as source:
+                                    target = negative_dir / filename
+                                    with open(target, 'wb') as f:
+                                        f.write(source.read())
+                                extracted_count += 1
+                                
+                                # Extract phase: 55% to 95%
+                                if total_audio > 0:
+                                    percent = 55 + int((i / total_audio) * 40)
+                                    # Update every 5% to avoid flooding
+                                    if percent >= last_extract_percent + 5:
+                                        last_extract_percent = percent
+                                        yield f"data: {json.dumps({'type': 'progress', 'message': f'Extracting... ({extracted_count}/{total_audio} files)', 'percent': percent})}\n\n"
+                                        await asyncio.sleep(0)
+                    
+                    yield f"data: {json.dumps({'type': 'progress', 'message': 'Cleaning up temporary files...', 'percent': 98})}\n\n"
+                    
+                except zipfile.BadZipFile:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Downloaded file is not a valid zip archive'})}\n\n"
+                    return
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'Extraction failed: {str(e)}'})}\n\n"
+                    return
+            
+            # Get final count
+            loader = RealNegativeDataLoader()
+            file_counts = loader.get_file_count()
+            
+            yield f"data: {json.dumps({'type': 'complete', 'message': f'Successfully downloaded {extracted_count} audio files!', 'file_count': file_counts['total'], 'percent': 100})}\n\n"
+            
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        generate_progress(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
