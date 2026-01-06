@@ -2,7 +2,6 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![Status](https://img.shields.io/badge/status-alpha-orange.svg)]()
 
 **WakeBuilder** is a comprehensive training platform that enables you to create custom wake word detection models entirely on your local machine—no cloud services, no subscriptions, and no machine learning expertise required.
 
@@ -32,10 +31,24 @@ WakeBuilder uses a three-layer architecture:
 
 ## 📋 Prerequisites
 
-- **Docker & Docker Compose** (recommended) OR
+### Hardware Requirements
+
+| Resource | Minimum | Recommended |
+| ---------- | --------- | ------------- |
+| **RAM** | 8GB free | 16GB+ free |
+| **GPU VRAM** | 6GB (for GPU acceleration) | 8GB+ |
+| **Storage** | 10GB free | 20GB+ free |
+| **CPU** | Multi-core | 8+ cores |
+
+> **Note on Docker:** Docker deployment requires additional overhead. If running via Docker, ensure you have at least **16GB total RAM** with **8GB free** after Windows/OS consumption. The Docker image includes pre-downloaded TTS models (~5GB) and requires significant memory for training.
+>
+> **Development Note:** This project has been successfully tested running locally with `uvicorn`. Docker deployment may require higher-end hardware due to WSL2/virtualization overhead on Windows. If you experience OOM (Out of Memory) errors with Docker, try running locally instead.
+
+### Software Requirements
+
 - **Python 3.12+** with `uv` package manager
-- **8GB RAM** minimum (16GB recommended)
-- **Multi-core CPU** (training will be faster)
+- **Docker & Docker Compose** (optional, for containerized deployment)
+- **NVIDIA GPU** with CUDA support (optional, for faster training)
 - **Microphone** for recording wake word samples
 
 ## 🚀 Quick Start
@@ -44,8 +57,8 @@ WakeBuilder uses a three-layer architecture:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/wakebuilder.git
-cd wakebuilder
+git clone https://github.com/XableTech/WakeBuilder.git
+cd WakeBuilder
 
 # Start WakeBuilder
 docker-compose up
@@ -54,25 +67,115 @@ docker-compose up
 # Navigate to http://localhost:8000
 ```
 
-### Using Python & uv
+> **Docker on Windows:** If you encounter memory issues (exit code 137), consider running locally with `uvicorn` instead (see below), or increase WSL2 memory allocation in `%USERPROFILE%\.wslconfig`.
+
+#### Windows Users: WSL2 Memory Configuration
+
+WakeBuilder requires significant memory for TTS synthesis and model training. By default, WSL2 (which Docker Desktop uses) limits memory allocation. To prevent out-of-memory crashes:
+
+**Step 1:** Create or edit the WSL configuration file:
+
+```powershell
+notepad "$env:USERPROFILE\.wslconfig"
+```
+
+**Step 2:** Add the following content (adjust values based on your hardware):
+
+```ini
+[wsl2]
+memory=20GB
+swap=8GB
+processors=8
+localhostForwarding=true
+```
+
+**Recommended values:**
+
+| Your RAM | `memory=` | `swap=` |
+|----------|-----------|---------|
+| 16GB     | 12GB      | 4GB     |
+| 24GB     | 20GB      | 8GB     |
+| 32GB+    | 24GB      | 8GB     |
+
+**Step 3:** Restart WSL and Docker:
+
+```powershell
+wsl --shutdown
+# Then restart Docker Desktop
+```
+
+**Step 4:** Verify the new memory limit:
+
+```powershell
+docker info | findstr "Memory"
+```
+
+### Using Python (Recommended)
+
+**Quick Start:**
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/wakebuilder.git
-cd wakebuilder
+git clone https://github.com/XableTech/WakeBuilder.git
+cd WakeBuilder
 
-# Create virtual environment and install dependencies
-uv sync
-
-# Activate the environment
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Run the application
-uvicorn src.wakebuilder.backend.main:app --host 0.0.0.0 --port 8000
-
-# Open your browser
-# Navigate to http://localhost:8000
+# Run the interactive setup script
+python run.py
 ```
+
+The `run.py` script will guide you through:
+
+1. **System check** - Python version, package manager (uv or pip)
+2. **CUDA detection** - Auto-detects your GPU for accelerated training
+3. **Virtual environment** - Creates `.venv` if needed
+4. **Dependencies** - Installs PyTorch with CUDA support + all packages
+5. **TTS models** - Downloads ~5GB of voice models
+6. **Verification** - Tests all imports work correctly
+7. **Server start** - Launches the web interface
+
+**Script Options:**
+
+```bash
+python run.py              # Interactive mode (prompts for each step)
+python run.py --auto       # Automatic mode (no prompts, runs everything)
+python run.py -y           # Same as --auto
+python run.py --check      # Verify environment only
+python run.py --install    # Install dependencies only
+python run.py --download   # Download TTS models only
+python run.py --run        # Run server only (skip setup)
+python run.py --cuda 12.4  # Use specific CUDA version
+python run.py --cuda cpu   # Use CPU-only PyTorch
+python run.py --help       # Show all options
+```
+
+**Manual Setup (Alternative):**
+
+Using `uv` (faster):
+
+```bash
+git clone https://github.com/XableTech/WakeBuilder.git
+cd WakeBuilder
+uv venv
+uv sync
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+uvicorn src.wakebuilder.backend.main:app --host 0.0.0.0 --port 8000
+```
+
+Using `pip`:
+
+```bash
+git clone https://github.com/XableTech/WakeBuilder.git
+cd WakeBuilder
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip install -e .
+uvicorn src.wakebuilder.backend.main:app --host 0.0.0.0 --port 8000
+```
+
+> **Note:** Replace `cu128` with your CUDA version (e.g., `cu124`, `cu121`, `cu118`) or use `cpu` for CPU-only.
+
+Navigate to **<http://localhost:8000>** in your browser.
 
 ## 📂 Negative Data Setup
 
@@ -88,7 +191,7 @@ The download progress will be displayed with percentage completion. The dataset 
 
 If you prefer to download the dataset manually:
 
-1. Download the UNAC dataset from: https://www.kaggle.com/datasets/rajichisami/universal-negative-audio-corpus-unac
+1. Download the UNAC dataset from: <https://www.kaggle.com/datasets/rajichisami/universal-negative-audio-corpus-unac>
 2. Extract the audio files (`.wav`, `.mp3`, `.flac`, or `.ogg`)
 3. Place them in the `data/negative/` folder
 
@@ -106,6 +209,7 @@ The application requires at least 100 audio files for training. More files (1000
 ### 2. Wait for Training
 
 Training typically takes 5-15 minutes. You'll see real-time progress updates:
+
 - ✅ Generating synthetic voice variations
 - ✅ Creating negative examples
 - ✅ Training classifier network
@@ -114,6 +218,7 @@ Training typically takes 5-15 minutes. You'll see real-time progress updates:
 ### 3. Test Your Model
 
 After training completes:
+
 - Speak your wake word into the microphone
 - Watch for visual feedback when detected
 - Adjust sensitivity slider to fine-tune behavior
@@ -121,7 +226,7 @@ After training completes:
 
 ## 🏗️ Project Structure
 
-```
+```markdown
 WakeBuilder/
 ├── src/
 │   └── wakebuilder/
@@ -198,7 +303,7 @@ uv run mypy src/
 
 WakeBuilder uses **Audio Spectrogram Transformer (AST)** with transfer learning. The pre-trained AST model (`MIT/ast-finetuned-speech-commands-v2`) is frozen and used as a feature extractor, while a custom classifier head is trained for your specific wake word.
 
-```
+```markdown
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        TRAINING PIPELINE                             │
 ├─────────────────────────────────────────────────────────────────────┤
@@ -236,7 +341,7 @@ WakeBuilder uses **Audio Spectrogram Transformer (AST)** with transfer learning.
 ### What Gets Fed Into the Model
 
 | Component | Shape | Description |
-|-----------|-------|-------------|
+| ----------- | ------- | ------------- |
 | **Raw Audio** | `(16000,)` | 1 second of audio at 16kHz sample rate |
 | **Spectrogram** | `(128, 1024)` | Mel spectrogram computed by AST feature extractor |
 | **AST Embedding** | `(768,)` | Fixed-size embedding from frozen AST model |
@@ -249,7 +354,7 @@ WakeBuilder uses **Audio Spectrogram Transformer (AST)** with transfer learning.
 From just 3-5 user recordings, we generate **2000+ positive samples**:
 
 | Augmentation | Variations | Description |
-|--------------|------------|-------------|
+| ------------ | ---------- | ----------- |
 | **TTS Voices** | 85 voices | Piper TTS with diverse accents/genders |
 | **Speed** | 0.9x, 0.95x, 1.0x, 1.05x, 1.1x | Time stretching |
 | **Pitch** | -2, -1, 0, +1, +2 semitones | Pitch shifting |
@@ -263,29 +368,32 @@ From just 3-5 user recordings, we generate **2000+ positive samples**:
 
 Two types of negative samples are generated:
 
-**1. Real Negatives (from LibriSpeech/CommonVoice)**
+**1. Real Negatives (from LibriSpeech/CommonVoice)**:
+
 - Random speech that doesn't contain the wake word
 - Target: **1.5x positive samples** (when max=0)
 - Chunked into 1-second segments
 
-**2. Hard Negatives (Phonetically Similar Words)**
+**2. Hard Negatives (Phonetically Similar Words)**:
+
 - Generated algorithmically from the wake word
 - Target: **3x positive samples**
 - Critical for preventing false positives
 
-Example for wake word "samix":
-```
-CRITICAL (Pure Prefixes):     sa, sam, sami, saa, sae
-HIGH (Prefix Extensions):     samer, sammy, samson, samuel
-HIGH (Suffixes):              amix, mix, ix
-HIGH (Edit Distance 1):       smix, asamix, samx
-MEDIUM (Phonetic Variations): hey samix, hi samix
+Example for wake word "jarvis":
+
+```markdown
+CRITICAL (Pure Prefixes):     ja, jar, jarv, jaa, jae
+HIGH (Prefix Extensions):     jarvey, jarvy, jarman, jarred
+HIGH (Suffixes):              arvis, rvis, vis
+HIGH (Edit Distance 1):       javis, jarvs, jarviss
+MEDIUM (Phonetic Variations): hey jarvis, hi jarvis
 ```
 
 ### Data Split
 
 | Set | Positive | Hard Negatives | Real Negatives | Total |
-|-----|----------|----------------|----------------|-------|
+| ----- | ---------- | ---------------- | ---------------- | ------- |
 | **Train (75%)** | ~1500 | ~4500 | ~2250 | ~8250 |
 | **Validation (25%)** | ~500 | ~1500 | ~750 | ~2750 |
 
@@ -294,7 +402,7 @@ MEDIUM (Phonetic Variations): hey samix, hi samix
 ### Training Configuration
 
 | Parameter | Value | Purpose |
-|-----------|-------|---------|
+| ----------- | ------- | --------- |
 | **Batch Size** | 32 | Samples per gradient update |
 | **Learning Rate** | 0.0005 | Step size for optimizer |
 | **Max Epochs** | 100 | Early stopping halts when converged |
@@ -332,7 +440,7 @@ WakeBuilder uses **transfer learning**. The AST base model (87M parameters) alre
 
 ### Inference Pipeline
 
-```
+```markdown
 Audio Input (1s @ 16kHz)
          │
          ▼
@@ -400,36 +508,42 @@ Each trained model produces:
 ## 🗺️ Roadmap
 
 ### Phase 1: Foundation ✅
+
 - [x] Base speech embedding model research and selection
 - [x] AST model integration via Hugging Face Transformers
 - [x] Audio preprocessing pipeline implementation
 - [x] Development environment validation
 
 ### Phase 2: Training Pipeline ✅
+
 - [x] Data augmentation system (TTS, speed, pitch, volume, noise)
 - [x] Hard negative generator (phonetically similar words)
 - [x] Classifier training loop with early stopping
 - [x] Model evaluation and threshold calibration
 
 ### Phase 3: Backend ✅
+
 - [x] FastAPI endpoints
 - [x] Job management system
 - [x] WebSocket for real-time testing
 - [x] File storage and organization
 
 ### Phase 4: Frontend ✅
+
 - [x] Home page and model dashboard
 - [x] Training wizard
 - [x] Progress tracking interface
 - [x] Real-time testing interface
 
 ### Phase 5: Deployment (In Progress)
+
 - [ ] Dockerfile
 - [ ] Docker Compose configuration
 - [x] Piper TTS integration (85 voices)
 - [ ] Default model training
 
 ### Phase 6: Polish
+
 - [ ] Comprehensive testing
 - [ ] Performance optimization
 - [x] Documentation
@@ -463,8 +577,8 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/wakebuilder/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/wakebuilder/discussions)
+- **Issues**: [GitHub Issues](https://github.com/XableTech/WakeBuilder/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/XableTech/WakeBuilder/discussions)
 - **Documentation**: [Full Documentation](https://wakebuilder.readthedocs.io)
 
 ## 🌟 Related Projects
@@ -475,6 +589,6 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 ---
 
-**Made with ❤️ by the WakeBuilder Team**
+**Made with ❤️ by Sami RAJICHI**.
 
 *Democratizing wake word technology, one voice at a time.*

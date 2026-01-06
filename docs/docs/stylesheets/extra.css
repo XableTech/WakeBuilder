@@ -1,0 +1,143 @@
+/* WakeBuilder Documentation - Custom Styles */
+
+/* Primary color theme */
+:root {
+  --md-primary-fg-color: #673AB7;
+  --md-primary-fg-color--light: #9575CD;
+  --md-primary-fg-color--dark: #512DA8;
+  --md-accent-fg-color: #FFC107;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #9575CD;
+  --md-primary-fg-color--light: #B39DDB;
+  --md-primary-fg-color--dark: #7E57C2;
+}
+
+/* Logo styling */
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 1.5rem;
+}
+
+/* Announcement bar styling */
+.md-banner {
+  background-color: var(--md-accent-fg-color);
+  color: #000;
+}
+
+/* Card grid enhancement */
+.grid.cards > ul > li {
+  border-radius: 8px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.grid.cards > ul > li:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+/* Custom admonition for tips */
+.md-typeset .admonition.tip,
+.md-typeset details.tip {
+  border-color: var(--md-accent-fg-color);
+}
+
+.md-typeset .tip > .admonition-title,
+.md-typeset .tip > summary {
+  background-color: rgba(255, 193, 7, 0.1);
+}
+
+/* Code block styling */
+.md-typeset pre > code {
+  border-radius: 8px;
+}
+
+/* Table styling */
+.md-typeset table:not([class]) {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Navigation tabs */
+.md-tabs__link {
+  font-weight: 500;
+}
+
+/* Feature icons */
+.md-typeset .twemoji {
+  vertical-align: middle;
+}
+
+/* Mermaid diagram styling */
+.mermaid {
+  background: transparent;
+  text-align: center;
+  padding: 1rem;
+}
+
+/* Hero section styling */
+.md-typeset h1 {
+  font-weight: 700;
+}
+
+/* Info boxes */
+.info-box {
+  padding: 1rem;
+  border-radius: 8px;
+  margin: 1rem 0;
+  background: var(--md-code-bg-color);
+  border-left: 4px solid var(--md-accent-fg-color);
+}
+
+/* Command output styling */
+.command-output {
+  background: #1a1a1a;
+  color: #00ff00;
+  font-family: monospace;
+  padding: 1rem;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+/* Architecture diagrams */
+.architecture-diagram {
+  text-align: center;
+  padding: 2rem;
+  background: var(--md-code-bg-color);
+  border-radius: 8px;
+  margin: 1rem 0;
+}
+
+/* Parameter tables */
+.param-table th {
+  background: var(--md-primary-fg-color);
+  color: white;
+}
+
+.param-table td {
+  vertical-align: top;
+}
+
+/* Version badge */
+.version-badge {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  background: var(--md-accent-fg-color);
+  color: #000;
+  font-weight: bold;
+  font-size: 0.875rem;
+}
+
+/* Footer styling */
+.md-footer-meta {
+  background-color: var(--md-primary-fg-color--dark);
+}
+
+/* Responsive adjustments */
+@media screen and (max-width: 76.1875em) {
+  .md-nav--primary .md-nav__title {
+    background-color: var(--md-primary-fg-color);
+  }
+}

@@ -1,0 +1,614 @@
+{
+  "voices": [
+    {
+      "name": "ca_ES-upc_ona-medium",
+      "onnx_file": "ca_ES-upc_ona-medium.onnx",
+      "json_file": "ca_ES-upc_ona-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "ca"
+    },
+    {
+      "name": "ca_ES-upc_pau-x_low",
+      "onnx_file": "ca_ES-upc_pau-x_low.onnx",
+      "json_file": "ca_ES-upc_pau-x_low.onnx.json",
+      "sample_rate": 16000,
+      "language": "ca"
+    },
+    {
+      "name": "cs_CZ-jirka-medium",
+      "onnx_file": "cs_CZ-jirka-medium.onnx",
+      "json_file": "cs_CZ-jirka-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "cs"
+    },
+    {
+      "name": "cy_GB-bu_tts-medium",
+      "onnx_file": "cy_GB-bu_tts-medium.onnx",
+      "json_file": "cy_GB-bu_tts-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "cy"
+    },
+    {
+      "name": "de_DE-eva_k-x_low",
+      "onnx_file": "de_DE-eva_k-x_low.onnx",
+      "json_file": "de_DE-eva_k-x_low.onnx.json",
+      "sample_rate": 16000,
+      "language": "de"
+    },
+    {
+      "name": "de_DE-karlsson-low",
+      "onnx_file": "de_DE-karlsson-low.onnx",
+      "json_file": "de_DE-karlsson-low.onnx.json",
+      "sample_rate": 16000,
+      "language": "de"
+    },
+    {
+      "name": "de_DE-kerstin-low",
+      "onnx_file": "de_DE-kerstin-low.onnx",
+      "json_file": "de_DE-kerstin-low.onnx.json",
+      "sample_rate": 16000,
+      "language": "de"
+    },
+    {
+      "name": "de_DE-pavoque-low",
+      "onnx_file": "de_DE-pavoque-low.onnx",
+      "json_file": "de_DE-pavoque-low.onnx.json",
+      "sample_rate": 16000,
+      "language": "de"
+    },
+    {
+      "name": "de_DE-ramona-low",
+      "onnx_file": "de_DE-ramona-low.onnx",
+      "json_file": "de_DE-ramona-low.onnx.json",
+      "sample_rate": 16000,
+      "language": "de"
+    },
+    {
+      "name": "de_DE-thorsten-medium",
+      "onnx_file": "de_DE-thorsten-medium.onnx",
+      "json_file": "de_DE-thorsten-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "de"
+    },
+    {
+      "name": "de_DE-thorsten_emotional-medium",
+      "onnx_file": "de_DE-thorsten_emotional-medium.onnx",
+      "json_file": "de_DE-thorsten_emotional-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "de"
+    },
+    {
+      "name": "en_GB-alan-medium",
+      "onnx_file": "en_GB-alan-medium.onnx",
+      "json_file": "en_GB-alan-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-gb-x-rp"
+    },
+    {
+      "name": "en_GB-alba-medium",
+      "onnx_file": "en_GB-alba-medium.onnx",
+      "json_file": "en_GB-alba-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-gb-x-rp"
+    },
+    {
+      "name": "en_GB-aru-medium",
+      "onnx_file": "en_GB-aru-medium.onnx",
+      "json_file": "en_GB-aru-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-gb-x-rp"
+    },
+    {
+      "name": "en_GB-cori-medium",
+      "onnx_file": "en_GB-cori-medium.onnx",
+      "json_file": "en_GB-cori-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en"
+    },
+    {
+      "name": "en_GB-jenny_dioco-medium",
+      "onnx_file": "en_GB-jenny_dioco-medium.onnx",
+      "json_file": "en_GB-jenny_dioco-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-gb-x-rp"
+    },
+    {
+      "name": "en_GB-northern_english_male-medium",
+      "onnx_file": "en_GB-northern_english_male-medium.onnx",
+      "json_file": "en_GB-northern_english_male-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-gb-x-rp"
+    },
+    {
+      "name": "en_GB-semaine-medium",
+      "onnx_file": "en_GB-semaine-medium.onnx",
+      "json_file": "en_GB-semaine-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-gb-x-rp"
+    },
+    {
+      "name": "en_GB-southern_english_female-low",
+      "onnx_file": "en_GB-southern_english_female-low.onnx",
+      "json_file": "en_GB-southern_english_female-low.onnx.json",
+      "sample_rate": 16000,
+      "language": "en-gb-x-rp"
+    },
+    {
+      "name": "en_GB-vctk-medium",
+      "onnx_file": "en_GB-vctk-medium.onnx",
+      "json_file": "en_GB-vctk-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-gb-x-rp"
+    },
+    {
+      "name": "en_US-amy-medium",
+      "onnx_file": "en_US-amy-medium.onnx",
+      "json_file": "en_US-amy-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-us"
+    },
+    {
+      "name": "en_US-arctic-medium",
+      "onnx_file": "en_US-arctic-medium.onnx",
+      "json_file": "en_US-arctic-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-us"
+    },
+    {
+      "name": "en_US-bryce-medium",
+      "onnx_file": "en_US-bryce-medium.onnx",
+      "json_file": "en_US-bryce-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en"
+    },
+    {
+      "name": "en_US-danny-low",
+      "onnx_file": "en_US-danny-low.onnx",
+      "json_file": "en_US-danny-low.onnx.json",
+      "sample_rate": 16000,
+      "language": "en-us"
+    },
+    {
+      "name": "en_US-hfc_female-medium",
+      "onnx_file": "en_US-hfc_female-medium.onnx",
+      "json_file": "en_US-hfc_female-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-us"
+    },
+    {
+      "name": "en_US-hfc_male-medium",
+      "onnx_file": "en_US-hfc_male-medium.onnx",
+      "json_file": "en_US-hfc_male-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-us"
+    },
+    {
+      "name": "en_US-joe-medium",
+      "onnx_file": "en_US-joe-medium.onnx",
+      "json_file": "en_US-joe-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-us"
+    },
+    {
+      "name": "en_US-john-medium",
+      "onnx_file": "en_US-john-medium.onnx",
+      "json_file": "en_US-john-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en"
+    },
+    {
+      "name": "en_US-kathleen-low",
+      "onnx_file": "en_US-kathleen-low.onnx",
+      "json_file": "en_US-kathleen-low.onnx.json",
+      "sample_rate": 16000,
+      "language": "en-us"
+    },
+    {
+      "name": "en_US-kristin-medium",
+      "onnx_file": "en_US-kristin-medium.onnx",
+      "json_file": "en_US-kristin-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en"
+    },
+    {
+      "name": "en_US-kusal-medium",
+      "onnx_file": "en_US-kusal-medium.onnx",
+      "json_file": "en_US-kusal-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-us"
+    },
+    {
+      "name": "en_US-l2arctic-medium",
+      "onnx_file": "en_US-l2arctic-medium.onnx",
+      "json_file": "en_US-l2arctic-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-us"
+    },
+    {
+      "name": "en_US-lessac-medium",
+      "onnx_file": "en_US-lessac-medium.onnx",
+      "json_file": "en_US-lessac-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-us"
+    },
+    {
+      "name": "en_US-libritts-high",
+      "onnx_file": "en_US-libritts-high.onnx",
+      "json_file": "en_US-libritts-high.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-us"
+    },
+    {
+      "name": "en_US-libritts_r-medium",
+      "onnx_file": "en_US-libritts_r-medium.onnx",
+      "json_file": "en_US-libritts_r-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-us"
+    },
+    {
+      "name": "en_US-ljspeech-medium",
+      "onnx_file": "en_US-ljspeech-medium.onnx",
+      "json_file": "en_US-ljspeech-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en"
+    },
+    {
+      "name": "en_US-norman-medium",
+      "onnx_file": "en_US-norman-medium.onnx",
+      "json_file": "en_US-norman-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en"
+    },
+    {
+      "name": "en_US-reza_ibrahim-medium",
+      "onnx_file": "en_US-reza_ibrahim-medium.onnx",
+      "json_file": "en_US-reza_ibrahim-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-us"
+    },
+    {
+      "name": "en_US-ryan-medium",
+      "onnx_file": "en_US-ryan-medium.onnx",
+      "json_file": "en_US-ryan-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-us"
+    },
+    {
+      "name": "en_US-sam-medium",
+      "onnx_file": "en_US-sam-medium.onnx",
+      "json_file": "en_US-sam-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "en-us"
+    },
+    {
+      "name": "es_AR-daniela-high",
+      "onnx_file": "es_AR-daniela-high.onnx",
+      "json_file": "es_AR-daniela-high.onnx.json",
+      "sample_rate": 22050,
+      "language": "es-419"
+    },
+    {
+      "name": "es_ES-carlfm-x_low",
+      "onnx_file": "es_ES-carlfm-x_low.onnx",
+      "json_file": "es_ES-carlfm-x_low.onnx.json",
+      "sample_rate": 16000,
+      "language": "es"
+    },
+    {
+      "name": "es_ES-davefx-medium",
+      "onnx_file": "es_ES-davefx-medium.onnx",
+      "json_file": "es_ES-davefx-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "es"
+    },
+    {
+      "name": "es_ES-sharvard-medium",
+      "onnx_file": "es_ES-sharvard-medium.onnx",
+      "json_file": "es_ES-sharvard-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "es"
+    },
+    {
+      "name": "es_MX-ald-medium",
+      "onnx_file": "es_MX-ald-medium.onnx",
+      "json_file": "es_MX-ald-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "es-419"
+    },
+    {
+      "name": "es_MX-claude-high",
+      "onnx_file": "es_MX-claude-high.onnx",
+      "json_file": "es_MX-claude-high.onnx.json",
+      "sample_rate": 22050,
+      "language": "es-419"
+    },
+    {
+      "name": "fa_IR-amir-medium",
+      "onnx_file": "fa_IR-amir-medium.onnx",
+      "json_file": "fa_IR-amir-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "fa"
+    },
+    {
+      "name": "fa_IR-ganji-medium",
+      "onnx_file": "fa_IR-ganji-medium.onnx",
+      "json_file": "fa_IR-ganji-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "fa"
+    },
+    {
+      "name": "fa_IR-ganji_adabi-medium",
+      "onnx_file": "fa_IR-ganji_adabi-medium.onnx",
+      "json_file": "fa_IR-ganji_adabi-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "fa"
+    },
+    {
+      "name": "fa_IR-gyro-medium",
+      "onnx_file": "fa_IR-gyro-medium.onnx",
+      "json_file": "fa_IR-gyro-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "fa"
+    },
+    {
+      "name": "fi_FI-harri-medium",
+      "onnx_file": "fi_FI-harri-medium.onnx",
+      "json_file": "fi_FI-harri-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "fi"
+    },
+    {
+      "name": "fr_FR-gilles-low",
+      "onnx_file": "fr_FR-gilles-low.onnx",
+      "json_file": "fr_FR-gilles-low.onnx.json",
+      "sample_rate": 16000,
+      "language": "fr"
+    },
+    {
+      "name": "fr_FR-siwis-medium",
+      "onnx_file": "fr_FR-siwis-medium.onnx",
+      "json_file": "fr_FR-siwis-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "fr"
+    },
+    {
+      "name": "fr_FR-tom-medium",
+      "onnx_file": "fr_FR-tom-medium.onnx",
+      "json_file": "fr_FR-tom-medium.onnx.json",
+      "sample_rate": 44100,
+      "language": "fr"
+    },
+    {
+      "name": "fr_FR-upmc-medium",
+      "onnx_file": "fr_FR-upmc-medium.onnx",
+      "json_file": "fr_FR-upmc-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "fr"
+    },
+    {
+      "name": "hi_IN-pratham-medium",
+      "onnx_file": "hi_IN-pratham-medium.onnx",
+      "json_file": "hi_IN-pratham-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "hi"
+    },
+    {
+      "name": "hi_IN-priyamvada-medium",
+      "onnx_file": "hi_IN-priyamvada-medium.onnx",
+      "json_file": "hi_IN-priyamvada-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "hi"
+    },
+    {
+      "name": "hi_IN-rohan-medium",
+      "onnx_file": "hi_IN-rohan-medium.onnx",
+      "json_file": "hi_IN-rohan-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "hi"
+    },
+    {
+      "name": "hu_HU-anna-medium",
+      "onnx_file": "hu_HU-anna-medium.onnx",
+      "json_file": "hu_HU-anna-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "hu"
+    },
+    {
+      "name": "hu_HU-berta-medium",
+      "onnx_file": "hu_HU-berta-medium.onnx",
+      "json_file": "hu_HU-berta-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "hu"
+    },
+    {
+      "name": "hu_HU-imre-medium",
+      "onnx_file": "hu_HU-imre-medium.onnx",
+      "json_file": "hu_HU-imre-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "hu"
+    },
+    {
+      "name": "id_ID-news_tts-medium",
+      "onnx_file": "id_ID-news_tts-medium.onnx",
+      "json_file": "id_ID-news_tts-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "id"
+    },
+    {
+      "name": "is_IS-bui-medium",
+      "onnx_file": "is_IS-bui-medium.onnx",
+      "json_file": "is_IS-bui-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "is"
+    },
+    {
+      "name": "is_IS-salka-medium",
+      "onnx_file": "is_IS-salka-medium.onnx",
+      "json_file": "is_IS-salka-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "is"
+    },
+    {
+      "name": "is_IS-steinn-medium",
+      "onnx_file": "is_IS-steinn-medium.onnx",
+      "json_file": "is_IS-steinn-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "is"
+    },
+    {
+      "name": "is_IS-ugla-medium",
+      "onnx_file": "is_IS-ugla-medium.onnx",
+      "json_file": "is_IS-ugla-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "is"
+    },
+    {
+      "name": "it_IT-paola-medium",
+      "onnx_file": "it_IT-paola-medium.onnx",
+      "json_file": "it_IT-paola-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "it"
+    },
+    {
+      "name": "it_IT-riccardo-x_low",
+      "onnx_file": "it_IT-riccardo-x_low.onnx",
+      "json_file": "it_IT-riccardo-x_low.onnx.json",
+      "sample_rate": 16000,
+      "language": "it"
+    },
+    {
+      "name": "lb_LU-marylux-medium",
+      "onnx_file": "lb_LU-marylux-medium.onnx",
+      "json_file": "lb_LU-marylux-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "lb"
+    },
+    {
+      "name": "lv_LV-aivars-medium",
+      "onnx_file": "lv_LV-aivars-medium.onnx",
+      "json_file": "lv_LV-aivars-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "lv"
+    },
+    {
+      "name": "ml_IN-arjun-medium",
+      "onnx_file": "ml_IN-arjun-medium.onnx",
+      "json_file": "ml_IN-arjun-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "ml"
+    },
+    {
+      "name": "ml_IN-meera-medium",
+      "onnx_file": "ml_IN-meera-medium.onnx",
+      "json_file": "ml_IN-meera-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "ml"
+    },
+    {
+      "name": "ne_NP-chitwan-medium",
+      "onnx_file": "ne_NP-chitwan-medium.onnx",
+      "json_file": "ne_NP-chitwan-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "ne"
+    },
+    {
+      "name": "ne_NP-google-medium",
+      "onnx_file": "ne_NP-google-medium.onnx",
+      "json_file": "ne_NP-google-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "ne"
+    },
+    {
+      "name": "nl_BE-nathalie-medium",
+      "onnx_file": "nl_BE-nathalie-medium.onnx",
+      "json_file": "nl_BE-nathalie-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "nl"
+    },
+    {
+      "name": "nl_BE-rdh-medium",
+      "onnx_file": "nl_BE-rdh-medium.onnx",
+      "json_file": "nl_BE-rdh-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "nl"
+    },
+    {
+      "name": "nl_NL-pim-medium",
+      "onnx_file": "nl_NL-pim-medium.onnx",
+      "json_file": "nl_NL-pim-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "nl"
+    },
+    {
+      "name": "nl_NL-ronnie-medium",
+      "onnx_file": "nl_NL-ronnie-medium.onnx",
+      "json_file": "nl_NL-ronnie-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "nl"
+    },
+    {
+      "name": "no_NO-talesyntese-medium",
+      "onnx_file": "no_NO-talesyntese-medium.onnx",
+      "json_file": "no_NO-talesyntese-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "nb"
+    },
+    {
+      "name": "pl_PL-gosia-medium",
+      "onnx_file": "pl_PL-gosia-medium.onnx",
+      "json_file": "pl_PL-gosia-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "pl"
+    },
+    {
+      "name": "pt_BR-cadu-medium",
+      "onnx_file": "pt_BR-cadu-medium.onnx",
+      "json_file": "pt_BR-cadu-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "pt-br"
+    },
+    {
+      "name": "pt_BR-edresson-low",
+      "onnx_file": "pt_BR-edresson-low.onnx",
+      "json_file": "pt_BR-edresson-low.onnx.json",
+      "sample_rate": 16000,
+      "language": "pt-br"
+    },
+    {
+      "name": "pt_BR-faber-medium",
+      "onnx_file": "pt_BR-faber-medium.onnx",
+      "json_file": "pt_BR-faber-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "pt-br"
+    },
+    {
+      "name": "pt_BR-jeff-medium",
+      "onnx_file": "pt_BR-jeff-medium.onnx",
+      "json_file": "pt_BR-jeff-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "pt-br"
+    },
+    {
+      "name": "ru_RU-denis-medium",
+      "onnx_file": "ru_RU-denis-medium.onnx",
+      "json_file": "ru_RU-denis-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "ru"
+    },
+    {
+      "name": "ru_RU-irina-medium",
+      "onnx_file": "ru_RU-irina-medium.onnx",
+      "json_file": "ru_RU-irina-medium.onnx.json",
+      "sample_rate": 22050,
+      "language": "ru"
+    },
+    {
+      "name": "uk_UA-lada-x_low",
+      "onnx_file": "uk_UA-lada-x_low.onnx",
+      "json_file": "uk_UA-lada-x_low.onnx.json",
+      "sample_rate": 16000,
+      "language": "uk"
+    }
+  ],
+  "count": 87
+}

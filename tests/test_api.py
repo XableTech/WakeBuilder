@@ -55,24 +55,30 @@ def sample_audio_bytes() -> bytes:
 
 @pytest.fixture
 def temp_model_dir(tmp_path: Path) -> Path:
-    """Create a temporary model directory with test model."""
+    """Create a temporary model directory with test model using AST."""
     import torch
 
-    from wakebuilder.models.classifier import create_model
+    from wakebuilder.models.classifier import WakeWordClassifier
 
     model_dir = tmp_path / "test_model"
     model_dir.mkdir()
 
-    # Create a simple model
-    model = create_model("tc_resnet", num_classes=2, n_mels=80)
+    # Create a simple classifier (not the full AST model for faster tests)
+    classifier = WakeWordClassifier(
+        embedding_dim=768,
+        hidden_dims=[256, 128],
+        dropout=0.3,
+    )
 
-    # Save model
+    # Save classifier state dict in the format used by the app
     torch.save(
         {
-            "model_state_dict": model.state_dict(),
-            "model_type": "tc_resnet",
-            "n_mels": 80,
-            "scale": 1.0,
+            "classifier_state_dict": classifier.state_dict(),
+            "wake_word": "Test Word",
+            "threshold": 0.5,
+            "embedding_dim": 768,
+            "classifier_hidden_dims": [256, 128],
+            "model_version": "2.0",
         },
         model_dir / "model.pt",
     )
@@ -81,7 +87,7 @@ def temp_model_dir(tmp_path: Path) -> Path:
     metadata = {
         "wake_word": "Test Word",
         "threshold": 0.5,
-        "model_type": "tc_resnet",
+        "model_type": "ast",
         "parameters": 64000,
         "metrics": {"val_accuracy": 0.95, "val_f1": 0.93},
     }
@@ -122,11 +128,13 @@ class TestHealthEndpoints:
         assert "torch_version" in data["system"]
         assert "cuda_available" in data["system"]
 
-    def test_root_redirects_to_docs(self, client: TestClient) -> None:
-        """Test root endpoint redirects to documentation."""
+    def test_root_serves_frontend_or_docs(self, client: TestClient) -> None:
+        """Test root endpoint serves frontend (200) or redirects to docs (307)."""
         response = client.get("/", follow_redirects=False)
-        assert response.status_code == 307
-        assert response.headers["location"] == "/docs"
+        # Returns 200 if frontend exists, 307 redirect if not
+        assert response.status_code in [200, 307]
+        if response.status_code == 307:
+            assert response.headers["location"] == "/docs"
 
     def test_openapi_schema_available(self, client: TestClient) -> None:
         """Test OpenAPI schema is available."""
@@ -271,10 +279,10 @@ class TestTrainingEndpoints:
         assert response.status_code == 400
         assert "only letters and spaces" in response.json()["detail"]
 
-    def test_start_training_too_few_recordings(
+    def test_start_training_one_recording_allowed(
         self, client: TestClient, sample_audio_bytes: bytes
     ) -> None:
-        """Test that too few recordings are rejected."""
+        """Test that one recording is now allowed (min_recordings=1)."""
         files = [
             ("recordings", ("audio1.wav", sample_audio_bytes, "audio/wav")),
         ]
@@ -285,8 +293,9 @@ class TestTrainingEndpoints:
             files=files,
         )
 
-        assert response.status_code == 400
-        assert "at least" in response.json()["detail"]
+        # Should accept the request (200) or fail due to missing TTS/dependencies (500/503)
+        # but NOT reject due to too few recordings (400)
+        assert response.status_code in [200, 500, 503]
 
     def test_get_status_not_found(self, client: TestClient) -> None:
         """Test getting status for non-existent job."""
@@ -413,14 +422,15 @@ class TestIntegration:
             "/api/train/start",
             data={
                 "wake_word": "Test Word",
-                "model_type": "tc_resnet",
+                # Note: model_type is no longer used, AST is always used
             },
             files=files,
         )
 
         # Should either succeed (200) or fail due to missing dependencies
         # in test environment (which is acceptable)
-        assert response.status_code in [200, 500]
+        # 503 = Service Unavailable (TTS not loaded)
+        assert response.status_code in [200, 500, 503]
 
         if response.status_code == 200:
             data = response.json()

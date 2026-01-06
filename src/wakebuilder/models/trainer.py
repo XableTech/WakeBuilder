@@ -331,6 +331,7 @@ class ASTTrainer:
                     train_tts_ratio=0.85,  # 85% TTS for voice diversity
                     val_tts_ratio=0.7,     # 70% TTS in validation (unseen voices)
                     val_split=self.config.val_split,
+                    progress_callback=progress_callback,  # Pass callback for granular progress
                 )
 
                 for audio, _ in train_pos:
@@ -452,6 +453,11 @@ class ASTTrainer:
                         # Progress from 38% to 43% during synthesis
                         progress_pct = 38 + (train_count / max(target_train_hard, 1)) * 5
                         report_progress(f"Synthesizing similar words... ({train_count}/{target_train_hard})", min(progress_pct, 43))
+                    
+                    # Free memory periodically to prevent OOM
+                    if idx % 50 == 0 and idx > 0:
+                        import gc
+                        gc.collect()
                     
                     # Priority tiers for voice allocation
                     is_critical = idx < 10  # Pure prefixes are most critical

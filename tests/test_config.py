@@ -57,7 +57,8 @@ def test_wakeword_validation_parameters():
 
 def test_recording_config_constraints():
     """Test that recording configuration has valid constraints."""
-    assert config.RECORDING_CONFIG["min_recordings"] >= 3
+    # min_recordings was changed from 3 to 1 since TTS generates most samples
+    assert config.RECORDING_CONFIG["min_recordings"] >= 1
     assert config.RECORDING_CONFIG["max_recordings"] >= config.RECORDING_CONFIG["min_recordings"]
     assert config.RECORDING_CONFIG["min_duration"] > 0
     assert config.RECORDING_CONFIG["max_duration"] > config.RECORDING_CONFIG["min_duration"]

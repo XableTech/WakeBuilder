@@ -13,11 +13,17 @@ References:
 """
 
 import gc
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
 
 import numpy as np
+
+# Suppress torch RNN dropout warning (Kokoro uses num_layers=1 with dropout)
+warnings.filterwarnings('ignore', message='dropout option adds dropout after all but last recurrent layer')
+# Suppress Kokoro repo_id default warning (we explicitly set it where possible)
+warnings.filterwarnings('ignore', message='Defaulting repo_id to hexgrad/Kokoro-82M')
 
 # Kokoro imports - wrapped in try/except for graceful degradation
 try:
@@ -214,7 +220,8 @@ class KokoroTTSGenerator:
         """Ensure the Kokoro model is loaded."""
         if self._model is None:
             print(f"Loading Kokoro model on {self._device}...")
-            self._model = KModel().to(self._device).eval()
+            # Explicitly pass repo_id to suppress warning
+            self._model = KModel(repo_id='hexgrad/Kokoro-82M').to(self._device).eval()
             print(f"Kokoro model loaded successfully on {self._device}")
     
     def _get_pipeline(self, voice_id: str) -> KPipeline:
@@ -236,7 +243,22 @@ class KokoroTTSGenerator:
         """Load and cache a voice pack."""
         if voice_id not in self._voice_packs:
             pipeline = self._get_pipeline(voice_id)
-            self._voice_packs[voice_id] = pipeline.load_voice(voice_id)
+            # Suppress the "Defaulting repo_id" warning printed by Kokoro
+            # Kokoro uses print() which goes to stdout
+            import sys
+            import io
+            import os
+            # Suppress stdout (where Kokoro prints the warning)
+            old_stdout = sys.stdout
+            sys.stdout = io.StringIO()
+            # Also suppress stderr just in case
+            old_stderr = sys.stderr  
+            sys.stderr = io.StringIO()
+            try:
+                self._voice_packs[voice_id] = pipeline.load_voice(voice_id)
+            finally:
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
         return self._voice_packs[voice_id]
     
     def synthesize(

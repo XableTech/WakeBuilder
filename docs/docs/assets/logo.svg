@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#7C3AED;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#A855F7;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#F59E0B;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#FBBF24;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Outer circle -->
+  <circle cx="100" cy="100" r="90" fill="url(#grad1)" opacity="0.15"/>
+  <circle cx="100" cy="100" r="90" stroke="url(#grad1)" stroke-width="3" fill="none"/>
+  
+  <!-- Sound waves -->
+  <path d="M55 100 C55 70, 75 50, 100 50 C125 50, 145 70, 145 100 C145 130, 125 150, 100 150 C75 150, 55 130, 55 100" 
+        stroke="url(#grad2)" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.6"/>
+  <path d="M40 100 C40 60, 65 30, 100 30 C135 30, 160 60, 160 100 C160 140, 135 170, 100 170 C65 170, 40 140, 40 100" 
+        stroke="url(#grad2)" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.4"/>
+  
+  <!-- Microphone body -->
+  <rect x="80" y="60" width="40" height="60" rx="20" fill="url(#grad1)"/>
+  
+  <!-- Microphone stand -->
+  <path d="M100 120 L100 150" stroke="url(#grad1)" stroke-width="6" stroke-linecap="round"/>
+  <path d="M75 150 L125 150" stroke="url(#grad1)" stroke-width="6" stroke-linecap="round"/>
+  
+  <!-- Microphone grille lines -->
+  <line x1="87" y1="75" x2="113" y2="75" stroke="white" stroke-width="2" opacity="0.4"/>
+  <line x1="87" y1="85" x2="113" y2="85" stroke="white" stroke-width="2" opacity="0.4"/>
+  <line x1="87" y1="95" x2="113" y2="95" stroke="white" stroke-width="2" opacity="0.4"/>
+  
+  <!-- Small dot indicator -->
+  <circle cx="100" cy="105" r="4" fill="url(#grad2)"/>
+</svg>

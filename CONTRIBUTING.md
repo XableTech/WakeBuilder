@@ -42,15 +42,15 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 ### Prerequisites
 
 - Python 3.12 or higher
-- `uv` package manager
+- `uv` package manager, or any other package manager of your choice
 - Git
 
 ### Setting Up Your Development Environment
 
 ```bash
 # Clone your fork
-git clone https://github.com/YOUR_USERNAME/wakebuilder.git
-cd wakebuilder
+git clone https://github.com/XableTech/WakeBuilder.git
+cd WakeBuilder
 
 # Create and activate virtual environment
 uv sync --group dev
@@ -161,8 +161,8 @@ uv run pytest tests/test_training.py::test_classifier_training
 
 Understanding the project structure will help you navigate the codebase:
 
-```
-src/wakebuilder/
+```markdown
+src/WakeBuilder/
 ├── __init__.py           # Package initialization
 ├── config.py             # Configuration settings
 ├── training/             # Training pipeline
@@ -187,7 +187,7 @@ We follow the [Conventional Commits](https://www.conventionalcommits.org/) speci
 
 ### Format
 
-```
+```markdown
 <type>(<scope>): <subject>
 
 <body>
@@ -207,7 +207,7 @@ We follow the [Conventional Commits](https://www.conventionalcommits.org/) speci
 
 ### Examples
 
-```
+```markdown
 feat(training): add pitch shift augmentation
 
 Implement pitch shifting in data augmentation pipeline to improve
@@ -216,7 +216,7 @@ model robustness across different voice pitches.
 Closes #123
 ```
 
-```
+```markdown
 fix(backend): handle WebSocket disconnection gracefully
 
 Add proper error handling for WebSocket disconnections during
@@ -236,6 +236,7 @@ Use descriptive branch names with prefixes:
 - `test/` - Test additions or updates
 
 Examples:
+
 - `feature/add-noise-augmentation`
 - `fix/websocket-connection-error`
 - `docs/update-installation-guide`
@@ -247,7 +248,7 @@ Examples:
 3. **Run the full test suite** and ensure all tests pass
 4. **Format and lint** your code
 5. **Update CHANGELOG.md** with your changes
-6. **Request review** from maintainers
+6. **Submit a pull request** for review
 
 ### Pull Request Template
 
@@ -305,11 +306,12 @@ We especially welcome contributions in these areas:
 If you have questions about contributing:
 
 1. Check the [documentation](https://wakebuilder.readthedocs.io)
-2. Search [existing issues](https://github.com/yourusername/wakebuilder/issues)
-3. Ask in [GitHub Discussions](https://github.com/yourusername/wakebuilder/discussions)
-4. Open a new issue with the `question` label
+2. Search [existing issues](https://github.com/XableTech/WakeBuilder/issues)
+3. Open a new issue with the `question` label
 
-## Recognition
+## About This Project
+
+WakeBuilder is currently developed and maintained by a single developer. While contributions are welcome, please understand that response times for reviewing PRs and issues may vary.
 
 Contributors will be recognized in:
 
@@ -317,4 +319,4 @@ Contributors will be recognized in:
 - **CHANGELOG.md** for significant contributions
 - **GitHub contributors** page
 
-Thank you for contributing to WakeBuilder! 🎙️
+Thank you for your interest in WakeBuilder! 🎙️

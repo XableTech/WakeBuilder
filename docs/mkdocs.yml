@@ -1,0 +1,201 @@
+# WakeBuilder Documentation Configuration
+# Built with MkDocs Material - https://squidfunk.github.io/mkdocs-material/
+
+site_name: WakeBuilder
+site_url: https://wakebuilder.readthedocs.io
+site_author: Sami RAJICHI
+site_description: >-
+  A comprehensive training platform for creating custom wake word detection models 
+  locally without requiring cloud services or machine learning expertise.
+
+# Repository
+repo_name: XableTech/WakeBuilder
+repo_url: https://github.com/XableTech/WakeBuilder
+edit_uri: edit/main/docs/
+
+# Copyright
+copyright: Copyright &copy; 2025-2026 Sami RAJICHI - Apache 2.0 License
+
+# Configuration
+theme:
+  name: material
+  language: en
+  
+  # Color Palette with Light/Dark Mode Toggle
+  palette:
+    - scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  
+  # Material Features
+  features:
+    - announce.dismiss
+    - content.action.edit
+    - content.action.view
+    - content.code.annotate
+    - content.code.copy
+    - content.tooltips
+    - navigation.footer
+    - navigation.indexes
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.instant.progress
+    - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.share
+    - search.suggest
+    - toc.follow
+  
+  # Custom Icons
+  icon:
+    repo: fontawesome/brands/github
+  
+  # Logo and Favicon
+  logo: assets/logo.svg
+  favicon: assets/favicon.svg
+
+# Plugins
+plugins:
+  - search:
+      separator: '[\s\-,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
+  - minify:
+      minify_html: true
+
+# Extensions
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.magiclink:
+      repo_url_shorthand: true
+      user: XableTech
+      repo: WakeBuilder
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+# Extra CSS/JS
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+# Extra Configuration
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/XableTech/WakeBuilder
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/wakebuilder/
+  generator: false
+  status:
+    new: Recently added
+    deprecated: Deprecated
+
+# Navigation Structure
+nav:
+  - Home:
+    - index.md
+    - Quick Start: getting-started/quick-start.md
+    - Installation: getting-started/installation.md
+    - What is a Wake Word?: getting-started/what-is-wake-word.md
+  
+  - User Guide:
+    - user-guide/index.md
+    - Creating Your First Model: user-guide/first-model.md
+    - Training Workflow: user-guide/training-workflow.md
+    - Testing Models: user-guide/testing-models.md
+    - Model Management: user-guide/model-management.md
+    - Web Interface Guide: user-guide/web-interface.md
+    - Tips for Best Results: user-guide/best-practices.md
+  
+  - Technical Guide:
+    - technical/index.md
+    - Architecture Overview: technical/architecture.md
+    - Audio Processing Pipeline: technical/audio-processing.md
+    - Data Generation & Augmentation: technical/data-generation.md
+    - TTS Providers: technical/tts-providers.md
+    - Hard Negative Generation: technical/hard-negatives.md
+    - AST Model Architecture: technical/ast-model.md
+    - Training Pipeline: technical/training-pipeline.md
+    - Model Evaluation: technical/model-evaluation.md
+    - ONNX Export: technical/onnx-export.md
+  
+  - Configuration:
+    - configuration/index.md
+    - Audio Settings: configuration/audio-settings.md
+    - Training Hyperparameters: configuration/hyperparameters.md
+    - Data Augmentation: configuration/augmentation.md
+    - Model Architecture Options: configuration/model-options.md
+  
+  - Deployment:
+    - deployment/index.md
+    - Local Development: deployment/local-development.md
+    - Docker Deployment: deployment/docker.md
+    - Production Considerations: deployment/production.md
+  
+  - Project Reference:
+    - reference/index.md
+    - Project Structure: reference/project-structure.md
+    - Scripts Reference: reference/scripts.md
+    - API Endpoints: reference/api-endpoints.md
+    - Data Formats: reference/data-formats.md
+  
+  - Contributing:
+    - contributing/index.md
+    - Development Setup: contributing/development-setup.md
+    - Code Style: contributing/code-style.md
+    - Testing: contributing/testing.md
+    - Pull Requests: contributing/pull-requests.md
+  
+  - About:
+    - about/index.md
+    - Project History: about/history.md
+    - Roadmap: about/roadmap.md
+    - License: about/license.md
+    - Acknowledgments: about/acknowledgments.md

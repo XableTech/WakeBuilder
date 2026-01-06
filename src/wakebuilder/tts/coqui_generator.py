@@ -53,12 +53,8 @@ COQUI_MODELS = {
         "multi_speaker": True,
         "languages": ["en", "fr-fr", "pt-br"],
     },
-    "tortoise": {
-        "model_name": "tts_models/en/multi-dataset/tortoise-v2",
-        "description": "High quality single speaker (slow)",
-        "multi_speaker": False,
-        "languages": ["en"],
-    },
+    # NOTE: Tortoise-v2 removed - requires 8GB+ RAM just to load, not suitable for containers
+    # If you need Tortoise, run it separately on a high-memory machine
     "ljspeech": {
         "model_name": "tts_models/en/ljspeech/vits",
         "description": "Single speaker, very natural",

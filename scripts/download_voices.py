@@ -2,11 +2,13 @@
 """
 Download Piper TTS voice models for WakeBuilder.
 
-This script downloads a diverse set of English voice models from Hugging Face
+This script downloads a diverse set of voice models from Hugging Face
 to enable synthetic data augmentation during wake word training.
 
 Voice models are stored in the tts_voices directory and include both
 .onnx model files and their corresponding .onnx.json metadata files.
+
+The list of voices is loaded from scripts/piper_tts_voices.json (87 voices).
 """
 
 import json
@@ -22,24 +24,52 @@ from wakebuilder.config import Config
 # Hugging Face base URL for Piper voices
 HF_BASE_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
 
-# Voice models to download - selected for diversity in gender, accent, and quality
-# Format: (language, locale, voice_name, quality)
-# Quality options: low, medium, high (higher = better quality but larger file)
-VOICE_MODELS = [
-    # Female voices - diverse selection
-    ("en", "en_US", "amy", "medium"),  # Clear female voice
-    ("en", "en_US", "lessac", "medium"),  # Professional female voice
-    ("en", "en_US", "kathleen", "low"),  # Casual female voice
-    ("en", "en_US", "kristin", "medium"),  # Natural female voice
-    # Male voices - diverse selection
-    ("en", "en_US", "ryan", "medium"),  # Clear male voice
-    ("en", "en_US", "joe", "medium"),  # Natural male voice
-    ("en", "en_US", "danny", "low"),  # Casual male voice
-    ("en", "en_US", "john", "medium"),  # Professional male voice
-    # British English for accent diversity
-    ("en", "en_GB", "alan", "medium"),  # British male
-    ("en", "en_GB", "alba", "medium"),  # British female (Scottish)
-]
+# Path to the JSON file with all voice definitions
+VOICES_JSON_PATH = Path(__file__).parent / "piper_tts_voices.json"
+
+
+def load_voice_models() -> list[dict]:
+    """
+    Load voice models from the piper_tts_voices.json file.
+    
+    Returns:
+        List of voice dictionaries with name, onnx_file, json_file, sample_rate, language
+    """
+    if not VOICES_JSON_PATH.exists():
+        print(f"[ERROR] Voice definitions file not found: {VOICES_JSON_PATH}")
+        return []
+    
+    try:
+        with open(VOICES_JSON_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        
+        voices = data.get("voices", [])
+        print(f"Loaded {len(voices)} voice definitions from {VOICES_JSON_PATH.name}")
+        return voices
+    except json.JSONDecodeError as e:
+        print(f"[ERROR] Invalid JSON in {VOICES_JSON_PATH}: {e}")
+        return []
+
+
+def parse_voice_name(voice_name: str) -> tuple[str, str, str, str]:
+    """
+    Parse a voice name like 'en_US-amy-medium' into components.
+    
+    Args:
+        voice_name: Voice name in format 'locale-voice-quality'
+    
+    Returns:
+        Tuple of (lang, locale, voice, quality)
+    """
+    # e.g. "en_US-amy-medium" -> ("en", "en_US", "amy", "medium")
+    parts = voice_name.split("-")
+    if len(parts) >= 3:
+        locale = parts[0]  # en_US
+        voice = "-".join(parts[1:-1])  # amy (or multi-word like "libritts_r")
+        quality = parts[-1]  # medium
+        lang = locale.split("_")[0]  # en
+        return lang, locale, voice, quality
+    return "", "", "", ""
 
 
 def get_voice_url(lang: str, locale: str, voice: str, quality: str) -> tuple[str, str]:
@@ -258,12 +288,18 @@ def main() -> int:
     print("WakeBuilder - Piper TTS Voice Download Script")
     print("=" * 70)
 
+    # Load voice definitions from JSON
+    voice_models = load_voice_models()
+    if not voice_models:
+        print("[ERROR] No voice models to download.")
+        return 1
+
     # Configuration
     config = Config()
     voices_dir = Path(config.TTS_VOICES_DIR)
 
     print(f"\nVoices directory: {voices_dir}")
-    print(f"Voices to download: {len(VOICE_MODELS)}")
+    print(f"Voices to download: {len(voice_models)}")
 
     # Ensure directory exists
     voices_dir.mkdir(parents=True, exist_ok=True)
@@ -271,12 +307,38 @@ def main() -> int:
     # Download each voice
     successful = 0
     failed = 0
+    skipped = 0
 
-    for lang, locale, voice, quality in VOICE_MODELS:
+    for i, voice_info in enumerate(voice_models, 1):
+        voice_name = voice_info.get("name", "")
+        if not voice_name:
+            continue
+        
+        # Parse voice name into components
+        lang, locale, voice, quality = parse_voice_name(voice_name)
+        if not all([lang, locale, voice, quality]):
+            print(f"\n[WARN] Could not parse voice name: {voice_name}")
+            failed += 1
+            continue
+        
+        # Check if already exists
+        onnx_path = voices_dir / f"{voice_name}.onnx"
+        json_path = voices_dir / f"{voice_name}.onnx.json"
+        
+        if onnx_path.exists() and json_path.exists():
+            print(f"\r  [{i}/{len(voice_models)}] {voice_name} - already exists", end="")
+            skipped += 1
+            successful += 1
+            continue
+        
+        # Download
+        print(f"\n[{i}/{len(voice_models)}]", end="")
         if download_voice(lang, locale, voice, quality, voices_dir):
             successful += 1
         else:
             failed += 1
+
+    print()  # New line after progress
 
     # Create index
     print("\n" + "=" * 70)
@@ -288,8 +350,9 @@ def main() -> int:
     print("Download Summary")
     print("=" * 70)
     print(f"  Successful: {successful}")
+    print(f"  Skipped (already exists): {skipped}")
     print(f"  Failed: {failed}")
-    print(f"  Total: {len(VOICE_MODELS)}")
+    print(f"  Total: {len(voice_models)}")
 
     if failed > 0:
         print("\n[WARN] Some voices failed to download.")
@@ -298,11 +361,6 @@ def main() -> int:
 
     print("\n[OK] All voices downloaded successfully!")
     print(f"\nVoices are stored in: {voices_dir}")
-    print("\nNext steps:")
-    print("  1. Implement TTS generator wrapper")
-    print(
-        '  2. Test voice synthesis with: uv run python -c "from wakebuilder.tts import TTSGenerator; ..."'
-    )
 
     return 0
 

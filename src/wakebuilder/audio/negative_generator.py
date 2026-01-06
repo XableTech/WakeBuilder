@@ -201,13 +201,13 @@ def get_phonetically_similar_words(wake_word: str) -> list[str]:
                 seen.add(repeated)
     
     # =========================================================================
-    # CRITICAL: Prefix matches (e.g., "sam" from "samix")
+    # CRITICAL: Prefix matches (e.g., "jarv" from "jarvis")
     # These cause the most false positives!
     # Pure prefixes MUST come first in the list!
     # =========================================================================
     if len(wake_word_lower) > 2:
         # First: Add PURE prefixes in order (shortest to longest)
-        # These are the most critical - "sa", "sam", "sami" for "samix"
+        # These are the most critical - "ja", "jar", "jarv" for "jarvis"
         for i in range(2, len(wake_word_lower)):
             prefix = wake_word_lower[:i]
             if prefix not in seen:
@@ -231,28 +231,28 @@ def get_phonetically_similar_words(wake_word: str) -> list[str]:
     # HIGH PRIORITY: Suffix matches and edit-distance-1 variations
     # =========================================================================
     if len(wake_word_lower) > 2:
-        # All suffixes (e.g., "mix" from "samix")
+        # All suffixes (e.g., "rvis" from "jarvis")
         for i in range(1, len(wake_word_lower) - 1):
             suffix = wake_word_lower[i:]
             if suffix not in seen:
                 high_priority.append(suffix)
                 seen.add(suffix)
         
-        # Single character deletions (e.g., "samx" from "samix")
+        # Single character deletions (e.g., "javis" from "jarvis")
         for i in range(len(wake_word_lower)):
             deleted = wake_word_lower[:i] + wake_word_lower[i+1:]
             if deleted not in seen and deleted != wake_word_lower:
                 high_priority.append(deleted)
                 seen.add(deleted)
         
-        # Single character duplications (e.g., "sammix" from "samix")
+        # Single character duplications (e.g., "jarrvis" from "jarvis")
         for i in range(len(wake_word_lower)):
             doubled = wake_word_lower[:i] + wake_word_lower[i] + wake_word_lower[i:]
             if doubled not in seen:
                 high_priority.append(doubled)
                 seen.add(doubled)
         
-        # Adjacent character swaps (e.g., "asmix" from "samix")
+        # Adjacent character swaps (e.g., "ajrvis" from "jarvis")
         for i in range(len(wake_word_lower) - 1):
             swapped = wake_word_lower[:i] + wake_word_lower[i+1] + wake_word_lower[i] + wake_word_lower[i+2:]
             if swapped not in seen:
@@ -270,11 +270,11 @@ def get_phonetically_similar_words(wake_word: str) -> list[str]:
     
     # =========================================================================
     # HIGH PRIORITY: Systematic character substitutions for last N characters
-    # This catches words like "samira" vs "samix" (same prefix, different ending)
+    # This catches words like "jarvey" vs "jarvis" (same prefix, different ending)
     # Pure algorithmic approach: no hardcoded lists
     # 
     # IMPORTANT: Exclude endings that contain the original last char or last 2 chars
-    # e.g., for "samix": exclude "samiex" (contains x), "samiix" (contains ix)
+    # e.g., for "jarvis": exclude "jarvies" (contains s), "jarviis" (contains is)
     # =========================================================================
     
     # Helper function to generate substitutions for a single word

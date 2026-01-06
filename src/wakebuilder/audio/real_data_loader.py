@@ -12,6 +12,7 @@ Supports:
 - Caching processed chunks for fast loading
 """
 
+import gc
 import hashlib
 import json
 import random
@@ -789,6 +790,7 @@ class MassivePositiveAugmenter:
         train_tts_ratio: float = 0.50,  # 50% of training from TTS for voice diversity
         val_tts_ratio: float = 0.60,    # 60% of validation from TTS (UNSEEN voices only)
         val_split: float = 0.25,        # 25% validation
+        progress_callback: callable = None,  # callback(message, percent) for progress updates
     ) -> tuple[list[tuple[np.ndarray, dict]], list[tuple[np.ndarray, dict]]]:
         """
         Generate samples with proper train/val split ensuring unseen TTS voices in validation.
@@ -816,6 +818,12 @@ class MassivePositiveAugmenter:
         Returns:
             Tuple of (train_samples, val_samples) where each sample is (audio, metadata)
         """
+        # Helper to report progress
+        def report_progress(message: str, percent: float):
+            print(message)
+            if progress_callback:
+                progress_callback(message, percent)
+        
         self._load_dependencies()
         self._seen_hashes.clear()
         
@@ -834,10 +842,35 @@ class MassivePositiveAugmenter:
         val_rec_target = int(val_size * (1 - val_tts_ratio))
         val_tts_target = val_size - val_rec_target
         
+        # =====================================================================
+        # Calculate per-provider TTS targets (distribute evenly across providers)
+        # This ensures ALL providers contribute to the target, not just Piper
+        # =====================================================================
+        available_providers = []
+        if use_tts and self._tts is not None:
+            available_providers.append("piper")
+        if self._kokoro_tts is not None:
+            available_providers.append("kokoro")
+        if self._coqui_tts is not None:
+            available_providers.append("coqui")
+        if self._edge_tts is not None:
+            available_providers.append("edge")
+        
+        num_providers = max(1, len(available_providers))
+        
+        # Distribute TTS targets evenly across available providers
+        per_provider_train_target = train_tts_target // num_providers
+        per_provider_val_target = val_tts_target // num_providers
+        
+        # Store per-provider targets for use in generation loops
+        self._provider_train_targets = {p: per_provider_train_target for p in available_providers}
+        self._provider_val_targets = {p: per_provider_val_target for p in available_providers}
+        
         num_recordings = len(recordings)
-        print(f"  Generating {target_count} positive samples from {num_recordings} recordings...")
+        report_progress(f"  Generating {target_count} positive samples from {num_recordings} recordings...", 31)
         print(f"    Train: {train_size} ({train_rec_target} rec + {train_tts_target} TTS)")
         print(f"    Val: {val_size} ({val_rec_target} rec + {val_tts_target} TTS with unseen voices)")
+        print(f"    TTS providers: {available_providers} ({per_provider_train_target} train / {per_provider_val_target} val each)")
         
         # Split TTS voices: 60% for training, 40% for validation (unseen)
         # More held-out voices = better generalization testing
@@ -851,7 +884,7 @@ class MassivePositiveAugmenter:
         train_voices = set(all_voices[val_voice_count:])
         
         if all_voices:
-            print(f"    TTS voices: {len(train_voices)} for training, {len(val_voices)} held-out for validation")
+            print(f"    Piper TTS voices: {len(train_voices)} for training, {len(val_voices)} held-out for validation")
         
         # =====================================================================
         # Generate recording-based samples
@@ -986,12 +1019,13 @@ class MassivePositiveAugmenter:
             print(f"    TTS voices used (first pass): {len(voices_used)}/{len(train_voices)}")
             
             # Second pass: add variations until target reached
+            piper_train_target = self._provider_train_targets.get("piper", train_tts_target)
             for voice in train_voices:
-                if train_tts_count >= train_tts_target:
+                if train_tts_count >= piper_train_target:
                     break
                 
                 for speed in self.speed_variations:
-                    if train_tts_count >= train_tts_target:
+                    if train_tts_count >= piper_train_target:
                         break
                     
                     try:
@@ -1008,7 +1042,7 @@ class MassivePositiveAugmenter:
                         
                         for pitch in self.pitch_shifts:
                             for volume in self.volume_variations[:3]:
-                                if train_tts_count >= train_tts_target:
+                                if train_tts_count >= piper_train_target:
                                     break
                                 
                                 aug = self._apply_pitch_shift(tts_audio, pitch)
@@ -1033,7 +1067,7 @@ class MassivePositiveAugmenter:
                     except Exception:
                         continue
             
-            print(f"    TTS training samples: {train_tts_count}")
+            report_progress(f"    Piper TTS training samples: {train_tts_count}", 33)
             
             # Validation TTS samples (from held-out voices only)
             # First pass: ensure every validation voice is used at least once
@@ -1073,12 +1107,13 @@ class MassivePositiveAugmenter:
             print(f"    TTS val voices used (first pass): {len(val_voices_used)}/{len(val_voices)}")
             
             # Second pass: add variations until target reached
+            piper_val_target = self._provider_val_targets.get("piper", val_tts_target)
             for voice in val_voices:
-                if val_tts_count >= val_tts_target:
+                if val_tts_count >= piper_val_target:
                     break
                 
                 for speed in self.speed_variations:
-                    if val_tts_count >= val_tts_target:
+                    if val_tts_count >= piper_val_target:
                         break
                     
                     try:
@@ -1095,7 +1130,7 @@ class MassivePositiveAugmenter:
                         
                         for pitch in self.pitch_shifts:
                             for volume in self.volume_variations[:3]:
-                                if val_tts_count >= val_tts_target:
+                                if val_tts_count >= piper_val_target:
                                     break
                                 
                                 aug = self._apply_pitch_shift(tts_audio, pitch)
@@ -1122,6 +1157,9 @@ class MassivePositiveAugmenter:
             
             print(f"    TTS validation samples (unseen voices): {val_tts_count}")
         
+        # Free memory after Piper TTS generation
+        gc.collect()
+        
         # =====================================================================
         # Generate Kokoro TTS samples (high-quality, diverse voices)
         # Uses ALL voices with speed (1.0, 1.5) and volume (-6, -3, 0, +3 dB) variations
@@ -1138,16 +1176,24 @@ class MassivePositiveAugmenter:
             kokoro_val_voices = set(kokoro_voices[:kokoro_val_count])
             kokoro_train_voices = set(kokoro_voices[kokoro_val_count:])
             
-            print(f"  Generating Kokoro TTS samples ({len(KOKORO_VOICES)} voices across all languages)...")
+            report_progress(f"  Generating Kokoro TTS samples ({len(KOKORO_VOICES)} voices)...", 34)
             print(f"    Kokoro voices: {len(kokoro_train_voices)} train, {len(kokoro_val_voices)} val (unseen)")
             print(f"    Speeds: {KOKORO_SPEED_VARIATIONS}, Volumes: {KOKORO_VOLUME_VARIATIONS} dB")
             
             kokoro_train_count = 0
             kokoro_val_count = 0
             
+            # Get per-provider targets
+            kokoro_train_target = self._provider_train_targets.get("kokoro", 9999999)
+            kokoro_val_target = self._provider_val_targets.get("kokoro", 9999999)
+            
             # Training samples from Kokoro (train voices only)
             for voice_id in kokoro_train_voices:
+                if kokoro_train_count >= kokoro_train_target:
+                    break
                 for speed in KOKORO_SPEED_VARIATIONS:  # [1.0, 1.5]
+                    if kokoro_train_count >= kokoro_train_target:
+                        break
                     try:
                         audio, _ = self._kokoro_tts.synthesize(
                             wake_word,
@@ -1165,6 +1211,8 @@ class MassivePositiveAugmenter:
                         
                         # Apply volume variations
                         for volume_db in KOKORO_VOLUME_VARIATIONS:
+                            if kokoro_train_count >= kokoro_train_target:
+                                break
                             aug = self._apply_volume_change(audio.copy(), volume_db)
                             
                             # Check for duplicates
@@ -1201,14 +1249,21 @@ class MassivePositiveAugmenter:
                                         kokoro_train_count += 1
                         
                     except Exception as e:
+                        # Log first few errors to help debug
+                        if kokoro_train_count == 0:
+                            print(f"      Kokoro error ({voice_id}): {e}")
                         continue
             
-            print(f"    Kokoro training samples: {kokoro_train_count}")
+            report_progress(f"    Kokoro training samples: {kokoro_train_count}", 37)
             
             # Validation samples from Kokoro (held-out voices only)
             # Only use base volume (0 dB) for validation - no augmentation
             for voice_id in kokoro_val_voices:
+                if kokoro_val_count >= kokoro_val_target:
+                    break
                 for speed in KOKORO_SPEED_VARIATIONS:
+                    if kokoro_val_count >= kokoro_val_target:
+                        break
                     try:
                         audio, _ = self._kokoro_tts.synthesize(
                             wake_word,
@@ -1250,17 +1305,26 @@ class MassivePositiveAugmenter:
             self._kokoro_tts.cleanup()
             self._kokoro_tts = None
         
+        # Free memory after Kokoro TTS
+        gc.collect()
+        
         # =====================================================================
         # Generate Coqui TTS samples (VCTK 109 speakers, YourTTS multi-lingual)
         # =====================================================================
         if self._coqui_tts is not None:
             from ..tts import COQUI_MODELS, COQUI_SPEED_VARIATIONS, COQUI_VOLUME_VARIATIONS
             
-            print(f"  Generating Coqui TTS samples ({len(COQUI_MODELS)} models)...")
+            report_progress(f"  Generating Coqui TTS samples ({len(COQUI_MODELS)} models)...", 38)
             coqui_train_count = 0
             coqui_val_count = 0
             
+            # Get per-provider targets
+            coqui_train_target = self._provider_train_targets.get("coqui", 9999999)
+            coqui_val_target = self._provider_val_targets.get("coqui", 9999999)
+            
             for model_key in self._coqui_tts.model_keys:
+                if coqui_train_count >= coqui_train_target and coqui_val_count >= coqui_val_target:
+                    break
                 speakers = self._coqui_tts.get_speakers(model_key)
                 if not speakers:
                     continue
@@ -1273,7 +1337,11 @@ class MassivePositiveAugmenter:
                 
                 # Training samples
                 for speaker in train_spk:
+                    if coqui_train_count >= coqui_train_target:
+                        break
                     for speed in COQUI_SPEED_VARIATIONS:
+                        if coqui_train_count >= coqui_train_target:
+                            break
                         try:
                             audio, _ = self._coqui_tts.synthesize(wake_word, model_key=model_key, speaker=speaker)
                             audio = self._pad_or_trim(audio)
@@ -1282,6 +1350,8 @@ class MassivePositiveAugmenter:
                                 audio = audio / max_val * 0.9
                             
                             for vol_db in COQUI_VOLUME_VARIATIONS:
+                                if coqui_train_count >= coqui_train_target:
+                                    break
                                 aug = self._apply_volume_change(audio.copy(), vol_db)
                                 h = compute_audio_hash(aug)
                                 if h in self._seen_hashes:
@@ -1294,6 +1364,8 @@ class MassivePositiveAugmenter:
                 
                 # Validation samples (held-out speakers)
                 for speaker in val_spk:
+                    if coqui_val_count >= coqui_val_target:
+                        break
                     try:
                         audio, _ = self._coqui_tts.synthesize(wake_word, model_key=model_key, speaker=speaker)
                         audio = self._pad_or_trim(audio)
@@ -1308,9 +1380,12 @@ class MassivePositiveAugmenter:
                     except Exception:
                         continue
             
-            print(f"    Coqui TTS: {coqui_train_count} train, {coqui_val_count} val samples")
+            report_progress(f"    Coqui TTS: {coqui_train_count} train, {coqui_val_count} val samples", 40)
             self._coqui_tts.cleanup()
             self._coqui_tts = None
+        
+        # Free memory after Coqui TTS
+        gc.collect()
         
         # =====================================================================
         # Generate Edge TTS samples (400+ voices)
@@ -1319,7 +1394,7 @@ class MassivePositiveAugmenter:
             from ..tts import EDGE_SPEED_VARIATIONS, EDGE_VOLUME_VARIATIONS
             
             voices = self._edge_tts.voice_ids
-            print(f"  Generating Edge TTS samples ({len(voices)} voices)...")
+            report_progress(f"  Generating Edge TTS samples ({len(voices)} voices)...", 41)
             
             # Split voices 70/30
             random.shuffle(voices)
@@ -1330,9 +1405,17 @@ class MassivePositiveAugmenter:
             edge_train_count = 0
             edge_val_count = 0
             
+            # Get per-provider targets
+            edge_train_target = self._provider_train_targets.get("edge", 9999999)
+            edge_val_target = self._provider_val_targets.get("edge", 9999999)
+            
             # Training samples
             for voice in train_voices:
+                if edge_train_count >= edge_train_target:
+                    break
                 for speed in EDGE_SPEED_VARIATIONS:
+                    if edge_train_count >= edge_train_target:
+                        break
                     try:
                         audio, _ = self._edge_tts.synthesize(wake_word, voice=voice, speed=speed)
                         audio = self._pad_or_trim(audio)
@@ -1341,6 +1424,8 @@ class MassivePositiveAugmenter:
                             audio = audio / max_val * 0.9
                         
                         for vol_db in EDGE_VOLUME_VARIATIONS:
+                            if edge_train_count >= edge_train_target:
+                                break
                             aug = self._apply_volume_change(audio.copy(), vol_db)
                             h = compute_audio_hash(aug)
                             if h in self._seen_hashes:
@@ -1353,6 +1438,8 @@ class MassivePositiveAugmenter:
             
             # Validation samples (held-out voices)
             for voice in val_voices:
+                if edge_val_count >= edge_val_target:
+                    break
                 try:
                     audio, _ = self._edge_tts.synthesize(wake_word, voice=voice, speed=1.0)
                     audio = self._pad_or_trim(audio)
@@ -1367,11 +1454,14 @@ class MassivePositiveAugmenter:
                 except Exception:
                     continue
             
-            print(f"    Edge TTS: {edge_train_count} train, {edge_val_count} val samples")
+            report_progress(f"    Edge TTS: {edge_train_count} train, {edge_val_count} val samples", 43)
             self._edge_tts.cleanup()
             self._edge_tts = None
         
-        print(f"  Total: {len(train_samples)} train, {len(val_samples)} val positive samples")
+        # Free memory after Edge TTS
+        gc.collect()
+        
+        report_progress(f"  Total: {len(train_samples)} train, {len(val_samples)} val positive samples", 44)
         return train_samples, val_samples
     
     def generate_samples(

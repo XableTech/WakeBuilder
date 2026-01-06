@@ -1,0 +1,63 @@
+# WakeBuilder Docker Compose Configuration
+#
+# Usage:
+#   docker-compose up -d          # Start in background
+#   docker-compose logs -f        # View logs
+#   docker-compose down           # Stop and remove
+#
+# GPU support: Automatically detected by PyTorch if nvidia-container-toolkit is installed
+
+services:
+  wakebuilder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wakebuilder:latest
+    container_name: wakebuilder
+
+    # Port mapping
+    ports:
+      - "8000:8000"
+
+    # Volume mounts for persistence
+    volumes:
+      # Trained models (persist across container restarts)
+      - ./models:/app/models
+      # Data directory (negative samples, cache)
+      - ./data:/app/data
+      # TTS voices (can be overridden if you have local voices)
+      - ./tts_voices:/app/tts_voices
+      # Recordings from the web UI
+      - ./recordings:/app/recordings
+
+    # Environment variables
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TTS_VOICES_DIR=/app/tts_voices
+      - DATA_DIR=/app/data
+      - MODELS_DIR=/app/models
+      # Suppress third-party deprecation/syntax warnings
+      - PYTHONWARNINGS=ignore::DeprecationWarning,ignore::FutureWarning,ignore::SyntaxWarning
+      # TensorFlow: disable verbose logging
+      - TF_CPP_MIN_LOG_LEVEL=2
+
+    # GPU support (optional, auto-detected by PyTorch)
+    # Requires nvidia-container-toolkit to be installed
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Health check
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
