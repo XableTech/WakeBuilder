@@ -125,6 +125,7 @@ celerybeat.pid
 
 # mkdocs documentation
 /site
+docs/site/
 
 # Backup files
 *.bak

@@ -2,7 +2,7 @@
 # Built with MkDocs Material - https://squidfunk.github.io/mkdocs-material/
 
 site_name: WakeBuilder
-site_url: https://wakebuilder.readthedocs.io
+site_url: https://xabletech.github.io/WakeBuilder/
 site_author: Sami RAJICHI
 site_description: >-
   A comprehensive training platform for creating custom wake word detection models 
