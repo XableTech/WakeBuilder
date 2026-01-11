@@ -31,36 +31,31 @@ def main():
         description="Build negative data cache for fast training"
     )
     parser.add_argument(
-        "-w", "--workers",
+        "-w",
+        "--workers",
         type=int,
         default=4,
-        help="Number of parallel workers (default: 4)"
+        help="Number of parallel workers (default: 4)",
     )
     parser.add_argument(
         "--spectrograms",
         action="store_true",
-        help="Build spectrogram cache (instant loading, recommended)"
+        help="Build spectrogram cache (instant loading, recommended)",
     )
     parser.add_argument(
-        "--clear",
-        action="store_true",
-        help="Clear existing cache before building"
+        "--clear", action="store_true", help="Clear existing cache before building"
     )
-    parser.add_argument(
-        "--info",
-        action="store_true",
-        help="Show cache info only"
-    )
-    
+    parser.add_argument("--info", action="store_true", help="Show cache info only")
+
     args = parser.parse_args()
-    
+
     loader = RealNegativeDataLoader()
-    
+
     # Show current cache info
     cache_info = loader.get_cache_info()
     spec_cache_info = loader.get_spectrogram_cache_info()
     file_counts = loader.get_file_count()
-    
+
     print(f"\n{'='*60}")
     print("Negative Data Cache Status")
     print(f"{'='*60}")
@@ -70,45 +65,47 @@ def main():
     print(f"    - FLAC: {file_counts['flac']:,}")
     print(f"    - OGG:  {file_counts['ogg']:,}")
     print()
-    
+
     if cache_info["cached"]:
         print(f"  Audio cache: {cache_info['chunk_count']:,} chunks")
         print(f"    Created: {cache_info.get('created_at', 'unknown')}")
     else:
         print("  Audio cache: Not built")
-    
+
     if spec_cache_info["cached"]:
-        print(f"  Spectrogram cache: {spec_cache_info['count']:,} spectrograms (INSTANT LOAD)")
+        print(
+            f"  Spectrogram cache: {spec_cache_info['count']:,} spectrograms (INSTANT LOAD)"
+        )
         print(f"    Created: {spec_cache_info.get('created_at', 'unknown')}")
     else:
         print("  Spectrogram cache: Not built")
     print()
-    
+
     if args.info:
         return
-    
+
     if args.clear:
         print("Clearing existing caches...")
         loader.clear_cache()
         loader.clear_spectrogram_cache()
         print()
-    
+
     if not loader.available:
         print("ERROR: No audio files found in data/negative/")
         sys.exit(1)
-    
+
     # Build audio cache first if needed
     if not cache_info["cached"] or cache_info["chunk_count"] == 0:
         print(f"{'='*60}")
         print(f"Building audio cache with {args.workers} workers...")
         print(f"{'='*60}")
         print()
-        
+
         chunk_count = loader.build_cache(max_workers=args.workers)
-        
+
         print()
         print(f"  Audio cache: {chunk_count:,} chunks")
-    
+
     # Build spectrogram cache if requested
     if args.spectrograms:
         print()
@@ -116,23 +113,24 @@ def main():
         print("Building spectrogram cache (this enables instant loading)...")
         print(f"{'='*60}")
         print()
-        
+
         # Import preprocessor
         from wakebuilder.audio import AudioPreprocessor
+
         preprocessor = AudioPreprocessor()
-        
+
         spec_count = loader.build_spectrogram_cache(preprocessor)
-        
+
         print()
         print(f"{'='*60}")
-        print(f"Spectrogram cache built!")
+        print("Spectrogram cache built!")
         print(f"  Total spectrograms: {spec_count:,}")
-        print(f"  Loading time: INSTANT (< 1 second)")
+        print("  Loading time: INSTANT (< 1 second)")
         print(f"{'='*60}")
     else:
         print()
         print(f"{'='*60}")
-        print(f"Audio cache ready!")
+        print("Audio cache ready!")
         print(f"  Total chunks: {cache_info['chunk_count']:,}")
         print()
         print("TIP: Run with --spectrograms for instant loading:")

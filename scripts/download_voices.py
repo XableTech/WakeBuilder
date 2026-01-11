@@ -31,18 +31,18 @@ VOICES_JSON_PATH = Path(__file__).parent / "piper_tts_voices.json"
 def load_voice_models() -> list[dict]:
     """
     Load voice models from the piper_tts_voices.json file.
-    
+
     Returns:
         List of voice dictionaries with name, onnx_file, json_file, sample_rate, language
     """
     if not VOICES_JSON_PATH.exists():
         print(f"[ERROR] Voice definitions file not found: {VOICES_JSON_PATH}")
         return []
-    
+
     try:
         with open(VOICES_JSON_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-        
+
         voices = data.get("voices", [])
         print(f"Loaded {len(voices)} voice definitions from {VOICES_JSON_PATH.name}")
         return voices
@@ -54,10 +54,10 @@ def load_voice_models() -> list[dict]:
 def parse_voice_name(voice_name: str) -> tuple[str, str, str, str]:
     """
     Parse a voice name like 'en_US-amy-medium' into components.
-    
+
     Args:
         voice_name: Voice name in format 'locale-voice-quality'
-    
+
     Returns:
         Tuple of (lang, locale, voice, quality)
     """
@@ -313,24 +313,26 @@ def main() -> int:
         voice_name = voice_info.get("name", "")
         if not voice_name:
             continue
-        
+
         # Parse voice name into components
         lang, locale, voice, quality = parse_voice_name(voice_name)
         if not all([lang, locale, voice, quality]):
             print(f"\n[WARN] Could not parse voice name: {voice_name}")
             failed += 1
             continue
-        
+
         # Check if already exists
         onnx_path = voices_dir / f"{voice_name}.onnx"
         json_path = voices_dir / f"{voice_name}.onnx.json"
-        
+
         if onnx_path.exists() and json_path.exists():
-            print(f"\r  [{i}/{len(voice_models)}] {voice_name} - already exists", end="")
+            print(
+                f"\r  [{i}/{len(voice_models)}] {voice_name} - already exists", end=""
+            )
             skipped += 1
             successful += 1
             continue
-        
+
         # Download
         print(f"\n[{i}/{len(voice_models)}]", end="")
         if download_voice(lang, locale, voice, quality, voices_dir):

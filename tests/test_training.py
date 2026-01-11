@@ -19,15 +19,12 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from wakebuilder.models import (
-    ASTWakeWordModel,
     ASTDataset,
     ASTTrainer,
     Trainer,
     TrainingConfig,
     WakeWordClassifier,
-    calibrate_threshold,
     count_parameters,
-    get_model_info,
 )
 
 
@@ -186,12 +183,15 @@ class TestASTDataset:
         """Load AST feature extractor for tests."""
         from transformers import AutoFeatureExtractor
         from wakebuilder.models.classifier import AST_MODEL_CHECKPOINT
+
         return AutoFeatureExtractor.from_pretrained(AST_MODEL_CHECKPOINT)
 
     def test_creation(self, feature_extractor):
         """Test dataset creation with audio samples."""
         # Generate raw audio arrays (not tuples)
-        audio_samples = [np.random.randn(16000).astype(np.float32) * 0.1 for _ in range(10)]
+        audio_samples = [
+            np.random.randn(16000).astype(np.float32) * 0.1 for _ in range(10)
+        ]
         labels = [1] * 5 + [0] * 5
 
         dataset = ASTDataset(audio_samples, labels, feature_extractor)
@@ -201,7 +201,9 @@ class TestASTDataset:
     def test_getitem(self, feature_extractor):
         """Test getting items from dataset."""
         # Generate raw audio arrays (not tuples)
-        audio_samples = [np.random.randn(16000).astype(np.float32) * 0.1 for _ in range(10)]
+        audio_samples = [
+            np.random.randn(16000).astype(np.float32) * 0.1 for _ in range(10)
+        ]
         labels = [1] * 5 + [0] * 5
 
         dataset = ASTDataset(audio_samples, labels, feature_extractor)
@@ -312,7 +314,7 @@ class TestCountParameters:
             embedding_dim=EMBEDDING_DIM,
             hidden_dims=[256, 128],
         )
-        
+
         total = count_parameters(classifier, trainable_only=False)
         trainable = count_parameters(classifier, trainable_only=True)
 
@@ -326,7 +328,7 @@ class TestCountParameters:
             embedding_dim=EMBEDDING_DIM,
             hidden_dims=[256, 128],
         )
-        
+
         # Freeze some parameters
         for param in list(classifier.parameters())[:2]:
             param.requires_grad = False

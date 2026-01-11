@@ -5,8 +5,6 @@ This module tests the configuration settings and directory creation
 functionality of WakeBuilder.
 """
 
-import pytest
-from pathlib import Path
 from src.wakebuilder import config
 
 
@@ -22,7 +20,7 @@ def test_audio_config_has_required_keys():
         "fmax",
         "duration",
     ]
-    
+
     for key in required_keys:
         assert key in config.AUDIO_CONFIG, f"Missing required key: {key}"
 
@@ -59,9 +57,15 @@ def test_recording_config_constraints():
     """Test that recording configuration has valid constraints."""
     # min_recordings was changed from 3 to 1 since TTS generates most samples
     assert config.RECORDING_CONFIG["min_recordings"] >= 1
-    assert config.RECORDING_CONFIG["max_recordings"] >= config.RECORDING_CONFIG["min_recordings"]
+    assert (
+        config.RECORDING_CONFIG["max_recordings"]
+        >= config.RECORDING_CONFIG["min_recordings"]
+    )
     assert config.RECORDING_CONFIG["min_duration"] > 0
-    assert config.RECORDING_CONFIG["max_duration"] > config.RECORDING_CONFIG["min_duration"]
+    assert (
+        config.RECORDING_CONFIG["max_duration"]
+        > config.RECORDING_CONFIG["min_duration"]
+    )
 
 
 def test_project_paths_are_absolute():
@@ -81,10 +85,10 @@ def test_ensure_directories_creates_structure(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(config, "TEMP_DIR", tmp_path / "data" / "temp")
     monkeypatch.setattr(config, "TTS_VOICES_DIR", tmp_path / "tts_voices")
-    
+
     # Call ensure_directories
     config.ensure_directories()
-    
+
     # Verify directories were created
     assert (tmp_path / "models").exists()
     assert (tmp_path / "models" / "default").exists()

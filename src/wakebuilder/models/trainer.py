@@ -47,25 +47,27 @@ logger = logging.getLogger(__name__)
 class FocalLoss(nn.Module):
     """
     Focal Loss for handling class imbalance and hard examples.
-    
+
     Focal loss down-weights easy examples and focuses on hard negatives,
     which is crucial for wake word detection where similar-sounding words
     should be confidently rejected.
-    
+
     FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
-    
+
     Args:
         alpha: Weighting factor for positive class (default: 0.25)
         gamma: Focusing parameter (default: 2.0, higher = more focus on hard examples)
         label_smoothing: Label smoothing factor (default: 0.0)
     """
-    
-    def __init__(self, alpha: float = 0.25, gamma: float = 2.0, label_smoothing: float = 0.0):
+
+    def __init__(
+        self, alpha: float = 0.25, gamma: float = 2.0, label_smoothing: float = 0.0
+    ):
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
         self.label_smoothing = label_smoothing
-    
+
     def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         # Apply label smoothing
         num_classes = inputs.size(-1)
@@ -75,27 +77,27 @@ class FocalLoss(nn.Module):
             targets_smooth.scatter_(1, targets.unsqueeze(1), 1.0 - self.label_smoothing)
         else:
             targets_smooth = F.one_hot(targets, num_classes).float()
-        
+
         # Compute probabilities
         p = F.softmax(inputs, dim=-1)
-        
+
         # Compute focal weight: (1 - p_t)^gamma
         p_t = (p * targets_smooth).sum(dim=-1)  # Probability of true class
         focal_weight = (1 - p_t) ** self.gamma
-        
+
         # Compute alpha weight
         alpha_weight = torch.where(
             targets == 1,
             torch.tensor(self.alpha, device=inputs.device),
             torch.tensor(1 - self.alpha, device=inputs.device),
         )
-        
+
         # Compute cross-entropy
-        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
-        
+        ce_loss = F.cross_entropy(inputs, targets, reduction="none")
+
         # Combine
         focal_loss = alpha_weight * focal_weight * ce_loss
-        
+
         return focal_loss.mean()
 
 
@@ -116,18 +118,22 @@ class TrainingConfig:
     warmup_epochs: int = 10
 
     # Regularization (higher values prevent overconfidence)
-    label_smoothing: float = 0.1  # Moderate smoothing allows confident predictions while preventing overfitting
-    mixup_alpha: float = 0.5       # More aggressive mixup
-    
+    label_smoothing: float = (
+        0.1  # Moderate smoothing allows confident predictions while preventing overfitting
+    )
+    mixup_alpha: float = 0.5  # More aggressive mixup
+
     # Focal loss for hard example mining
-    use_focal_loss: bool = True    # Use focal loss instead of cross-entropy
-    focal_alpha: float = 0.25      # Weight for positive class in focal loss
-    focal_gamma: float = 2.0       # Focusing parameter (higher = more focus on hard examples)
-    
+    use_focal_loss: bool = True  # Use focal loss instead of cross-entropy
+    focal_alpha: float = 0.25  # Weight for positive class in focal loss
+    focal_gamma: float = (
+        2.0  # Focusing parameter (higher = more focus on hard examples)
+    )
+
     # Classifier architecture enhancements
-    use_attention: bool = False    # Use self-attention in classifier
-    use_se_block: bool = False     # Use Squeeze-and-Excitation block for channel attention
-    use_tcn: bool = False          # Use Temporal Convolutional Network block
+    use_attention: bool = False  # Use self-attention in classifier
+    use_se_block: bool = False  # Use Squeeze-and-Excitation block for channel attention
+    use_tcn: bool = False  # Use Temporal Convolutional Network block
 
     # Early stopping
     patience: int = 8  # 0=disabled, 1-15 epochs without improvement
@@ -145,10 +151,12 @@ class TrainingConfig:
     use_real_negatives: bool = True
     max_real_negatives: int = 0  # 0 = auto-balance using ratio
     use_hard_negatives: bool = True  # Generate phonetically similar words as negatives
-    
+
     # Negative ratios (when max_real_negatives=0)
     negative_ratio: float = 2.0  # Real negatives = positives * ratio (2-3x recommended)
-    hard_negative_ratio: float = 4.0  # Hard negatives = positives * ratio (4x recommended for good discrimination)
+    hard_negative_ratio: float = (
+        4.0  # Hard negatives = positives * ratio (4x recommended for good discrimination)
+    )
 
     # Device
     device: str = "auto"
@@ -215,10 +223,12 @@ class ASTDataset(Dataset):
         return input_values, label
 
 
-def collate_fn(batch: list[tuple[torch.Tensor, int]]) -> tuple[torch.Tensor, torch.Tensor]:
+def collate_fn(
+    batch: list[tuple[torch.Tensor, int]],
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Collate function for AST dataset.
-    
+
     Pads input values to the same length within a batch.
     """
     input_values = [item[0] for item in batch]
@@ -265,7 +275,9 @@ class ASTTrainer:
 
         # Load AST feature extractor
         logger.info(f"Loading AST feature extractor from {AST_MODEL_CHECKPOINT}")
-        self.feature_extractor = AutoFeatureExtractor.from_pretrained(AST_MODEL_CHECKPOINT)
+        self.feature_extractor = AutoFeatureExtractor.from_pretrained(
+            AST_MODEL_CHECKPOINT
+        )
 
     def prepare_data(
         self,
@@ -288,12 +300,13 @@ class ASTTrainer:
         Returns:
             Tuple of (train_loader, val_loader)
         """
+
         def report_progress(message: str, percent: float = 0):
             """Report progress to callback if available."""
             print(message)
             if progress_callback:
                 progress_callback(message, percent)
-        
+
         report_progress("Preparing training data...", 30)
 
         train_audio: list[np.ndarray] = []
@@ -311,6 +324,7 @@ class ASTTrainer:
             # Resample if needed
             if sr != 16000:
                 import librosa
+
                 audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
             all_positive.append(audio)
 
@@ -318,7 +332,7 @@ class ASTTrainer:
             # Import augmentation modules
             try:
                 from ..audio.real_data_loader import MassivePositiveAugmenter
-                
+
                 augmenter = MassivePositiveAugmenter(target_sample_rate=16000)
                 # Heavy TTS for better generalization across voices
                 # User recordings are just seeds for augmentation
@@ -329,7 +343,7 @@ class ASTTrainer:
                     use_tts=True,
                     use_noise=True,
                     train_tts_ratio=0.85,  # 85% TTS for voice diversity
-                    val_tts_ratio=0.7,     # 70% TTS in validation (unseen voices)
+                    val_tts_ratio=0.7,  # 70% TTS in validation (unseen voices)
                     val_split=self.config.val_split,
                     progress_callback=progress_callback,  # Pass callback for granular progress
                 )
@@ -364,12 +378,12 @@ class ASTTrainer:
         # NEGATIVE SAMPLES
         # =====================================================================
         all_negative = []
-        hard_negatives = []  # Phonetically similar words (TTS generated)
 
         # Process provided negative audio
         for audio, sr in negative_audio:
             if sr != 16000:
                 import librosa
+
                 audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
             all_negative.append(audio)
 
@@ -389,12 +403,16 @@ class ASTTrainer:
                 if max_neg == 0:
                     max_neg = int(num_positive * self.config.negative_ratio)
 
-                report_progress(f"Loading {max_neg} real negative samples from cache...", 35)
+                report_progress(
+                    f"Loading {max_neg} real negative samples from cache...", 35
+                )
 
                 # Try cache first - only real audio, no TTS negatives
                 cache_info = real_neg_loader.get_cache_info()
                 if cache_info.get("cached", False):
-                    for audio, _ in real_neg_loader.load_from_cache(max_samples=max_neg):
+                    for audio, _ in real_neg_loader.load_from_cache(
+                        max_samples=max_neg
+                    ):
                         all_negative.append(audio)
                 elif real_neg_loader.available:
                     for audio, _ in real_neg_loader.load_samples(max_samples=max_neg):
@@ -409,64 +427,95 @@ class ASTTrainer:
         # =====================================================================
         train_hard_negatives = []  # Separate lists for train/val
         val_hard_negatives = []
-        
+
         if self.config.use_hard_negatives:
             try:
                 from ..audio.negative_generator import get_phonetically_similar_words
                 from ..tts import TTSGenerator
-                
+
                 similar_words = get_phonetically_similar_words(wake_word)
-                report_progress(f"Generating hard negatives from {len(similar_words)} similar words...", 37)
-                
+                report_progress(
+                    f"Generating hard negatives from {len(similar_words)} similar words...",
+                    37,
+                )
+
                 tts = TTSGenerator(target_sample_rate=16000)
                 all_voices = list(tts.voice_names)
-                
+
                 # Split voices: some for train, some ONLY for validation
                 num_val_voices = max(2, len(all_voices) // 4)  # 25% for val
                 val_voices = all_voices[:num_val_voices]
                 train_voices = all_voices[num_val_voices:]
-                
+
                 # Use configurable ratio for hard negatives
                 # This ensures the model sees many variations of similar-sounding words
                 target_train_hard = int(num_train_pos * self.config.hard_negative_ratio)
                 target_val_hard = int(num_val_pos * self.config.hard_negative_ratio)
-                
-                report_progress(f"Target: {target_train_hard + target_val_hard} hard negatives ({self.config.hard_negative_ratio}x ratio)", 38)
-                
+
+                report_progress(
+                    f"Target: {target_train_hard + target_val_hard} hard negatives ({self.config.hard_negative_ratio}x ratio)",
+                    38,
+                )
+
                 # Generate samples for similar words
                 # Use ALL available similar words and voices to reach target
                 # Priority: pure prefixes > suffixes > edit-distance variations
                 train_count = 0
                 val_count = 0
-                
+
                 # Calculate how many words we need to process
                 # With ~10 voices per word and pitch variations, each word gives ~15-30 samples
                 # To get 20,000 samples, we need ~700-1300 words
                 max_words = min(len(similar_words), max(100, target_train_hard // 15))
-                
+
                 for idx, word in enumerate(similar_words[:max_words]):
-                    if train_count >= target_train_hard and val_count >= target_val_hard:
+                    if (
+                        train_count >= target_train_hard
+                        and val_count >= target_val_hard
+                    ):
                         break
-                    
+
                     # Report progress periodically (every 10 words)
                     if idx % 10 == 0:
                         # Progress from 38% to 43% during synthesis
-                        progress_pct = 38 + (train_count / max(target_train_hard, 1)) * 5
-                        report_progress(f"Synthesizing similar words... ({train_count}/{target_train_hard})", min(progress_pct, 43))
-                    
+                        progress_pct = (
+                            38 + (train_count / max(target_train_hard, 1)) * 5
+                        )
+                        report_progress(
+                            f"Synthesizing similar words... ({train_count}/{target_train_hard})",
+                            min(progress_pct, 43),
+                        )
+
                     # Free memory periodically to prevent OOM
                     if idx % 50 == 0 and idx > 0:
                         import gc
+
                         gc.collect()
-                    
+
                     # Priority tiers for voice allocation
                     is_critical = idx < 10  # Pure prefixes are most critical
                     is_important = idx < 50  # Next tier of importance
-                    
+
                     # Use more voices for critical/important words
-                    num_train_voices = len(train_voices) if is_critical else (len(train_voices) // 2 if is_important else max(3, len(train_voices) // 4))
-                    num_val_voices_use = len(val_voices) if is_critical else (len(val_voices) // 2 if is_important else max(2, len(val_voices) // 4))
-                    
+                    num_train_voices = (
+                        len(train_voices)
+                        if is_critical
+                        else (
+                            len(train_voices) // 2
+                            if is_important
+                            else max(3, len(train_voices) // 4)
+                        )
+                    )
+                    num_val_voices_use = (
+                        len(val_voices)
+                        if is_critical
+                        else (
+                            len(val_voices) // 2
+                            if is_important
+                            else max(2, len(val_voices) // 4)
+                        )
+                    )
+
                     # Training samples
                     for voice in train_voices[:num_train_voices]:
                         if train_count >= target_train_hard:
@@ -477,8 +526,11 @@ class ASTTrainer:
                                 # Resample if needed
                                 if sr != 16000:
                                     import librosa
-                                    audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
-                                
+
+                                    audio = librosa.resample(
+                                        audio, orig_sr=sr, target_sr=16000
+                                    )
+
                                 # Pad/trim to 1 second
                                 target_len = 16000
                                 if len(audio) > target_len:
@@ -487,37 +539,56 @@ class ASTTrainer:
                                     audio = np.pad(audio, (0, target_len - len(audio)))
                                 train_hard_negatives.append(audio.astype(np.float32))
                                 train_count += 1
-                                
+
                                 # Add pitch and speed variations to increase sample count
                                 if train_count < target_train_hard:
                                     try:
                                         import librosa
+
                                         # Pitch variations (more for critical words)
-                                        pitch_shifts = [-3, -1, 1, 3] if is_critical else [-2, 2]
+                                        pitch_shifts = (
+                                            [-3, -1, 1, 3] if is_critical else [-2, 2]
+                                        )
                                         for shift in pitch_shifts:
                                             if train_count >= target_train_hard:
                                                 break
-                                            pitched = librosa.effects.pitch_shift(audio, sr=16000, n_steps=shift)
-                                            train_hard_negatives.append(pitched.astype(np.float32))
+                                            pitched = librosa.effects.pitch_shift(
+                                                audio, sr=16000, n_steps=shift
+                                            )
+                                            train_hard_negatives.append(
+                                                pitched.astype(np.float32)
+                                            )
                                             train_count += 1
-                                        
+
                                         # Speed variations for critical words
                                         if is_critical:
                                             for rate in [0.9, 1.1]:
                                                 if train_count >= target_train_hard:
                                                     break
-                                                stretched = librosa.effects.time_stretch(audio, rate=rate)
+                                                stretched = (
+                                                    librosa.effects.time_stretch(
+                                                        audio, rate=rate
+                                                    )
+                                                )
                                                 if len(stretched) > target_len:
                                                     stretched = stretched[:target_len]
                                                 else:
-                                                    stretched = np.pad(stretched, (0, target_len - len(stretched)))
-                                                train_hard_negatives.append(stretched.astype(np.float32))
+                                                    stretched = np.pad(
+                                                        stretched,
+                                                        (
+                                                            0,
+                                                            target_len - len(stretched),
+                                                        ),
+                                                    )
+                                                train_hard_negatives.append(
+                                                    stretched.astype(np.float32)
+                                                )
                                                 train_count += 1
                                     except Exception:
                                         pass
-                        except Exception as e:
+                        except Exception:
                             pass
-                    
+
                     # Validation samples (unseen voices)
                     for voice in val_voices[:num_val_voices_use]:
                         if val_count >= target_val_hard:
@@ -528,8 +599,11 @@ class ASTTrainer:
                                 # Resample if needed
                                 if sr != 16000:
                                     import librosa
-                                    audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
-                                
+
+                                    audio = librosa.resample(
+                                        audio, orig_sr=sr, target_sr=16000
+                                    )
+
                                 # Pad/trim to 1 second
                                 target_len = 16000
                                 if len(audio) > target_len:
@@ -540,29 +614,32 @@ class ASTTrainer:
                                 val_count += 1
                         except Exception:
                             pass
-                
-                report_progress(f"Generated {len(train_hard_negatives) + len(val_hard_negatives)} hard negatives", 43)
-                
+
+                report_progress(
+                    f"Generated {len(train_hard_negatives) + len(val_hard_negatives)} hard negatives",
+                    43,
+                )
+
             except ImportError as e:
                 logger.warning(f"Hard negative generation not available: {e}")
 
         # Split regular negatives (not hard negatives)
         random.shuffle(all_negative)
         val_neg_size = int(len(all_negative) * self.config.val_split)
-        
+
         # Add regular negatives
         val_audio.extend(all_negative[:val_neg_size])
         val_labels.extend([0] * val_neg_size)
         train_audio.extend(all_negative[val_neg_size:])
         train_labels.extend([0] * (len(all_negative) - val_neg_size))
-        
+
         # Add hard negatives SEPARATELY (already split by voice)
         # This ensures validation has hard negatives from unseen voices
         train_audio.extend(train_hard_negatives)
         train_labels.extend([0] * len(train_hard_negatives))
         val_audio.extend(val_hard_negatives)
         val_labels.extend([0] * len(val_hard_negatives))
-        
+
         num_train_neg = sum(1 for l in train_labels if l == 0)
         num_val_neg = sum(1 for l in val_labels if l == 0)
 
@@ -575,7 +652,9 @@ class ASTTrainer:
             "num_val_samples": len(val_audio),
         }
 
-        report_progress(f"Data ready: {len(train_audio)} train, {len(val_audio)} val samples", 44)
+        report_progress(
+            f"Data ready: {len(train_audio)} train, {len(val_audio)} val samples", 44
+        )
 
         # Create datasets
         train_dataset = ASTDataset(
@@ -641,7 +720,7 @@ class ASTTrainer:
         print(f"  Total parameters: {total_params:,}")
         print(f"  Trainable parameters: {trainable_params:,}")
         print(f"  Frozen parameters: {total_params - trainable_params:,}")
-        
+
         # Print enabled enhancements
         enhancements = []
         if self.config.use_attention:
@@ -652,9 +731,11 @@ class ASTTrainer:
             enhancements.append("TCN")
         if enhancements:
             print(f"  Enhancements: {', '.join(enhancements)}")
-        
+
         if self.config.use_focal_loss:
-            print(f"  Focal Loss: gamma={self.config.focal_gamma}, alpha={self.config.focal_alpha}")
+            print(
+                f"  Focal Loss: gamma={self.config.focal_gamma}, alpha={self.config.focal_alpha}"
+            )
 
         return model.to(self.device)
 
@@ -671,7 +752,9 @@ class ASTTrainer:
 
         # OneCycleLR scheduler
         total_steps = max(num_batches * self.config.num_epochs, 10)
-        warmup_pct = min(self.config.warmup_epochs / max(self.config.num_epochs, 1), 0.3)
+        warmup_pct = min(
+            self.config.warmup_epochs / max(self.config.num_epochs, 1), 0.3
+        )
 
         self.scheduler = OneCycleLR(
             self.optimizer,
@@ -707,7 +790,7 @@ class ASTTrainer:
         total_loss = 0.0
         correct = 0
         total = 0
-        
+
         # Create focal loss if enabled
         focal_loss_fn = None
         if self.config.use_focal_loss:
@@ -731,7 +814,9 @@ class ASTTrainer:
 
                 # Use focal loss or cross-entropy
                 if focal_loss_fn is not None:
-                    loss = lam * focal_loss_fn(outputs, labels_a) + (1 - lam) * focal_loss_fn(outputs, labels_b)
+                    loss = lam * focal_loss_fn(outputs, labels_a) + (
+                        1 - lam
+                    ) * focal_loss_fn(outputs, labels_b)
                 else:
                     loss = lam * F.cross_entropy(
                         outputs, labels_a, label_smoothing=self.config.label_smoothing
@@ -751,7 +836,9 @@ class ASTTrainer:
             # Backward pass
             self.optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.classifier.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(
+                self.model.classifier.parameters(), max_norm=1.0
+            )
             self.optimizer.step()
             self.scheduler.step()
 
@@ -805,7 +892,11 @@ class ASTTrainer:
 
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        f1 = (
+            2 * precision * recall / (precision + recall)
+            if (precision + recall) > 0
+            else 0.0
+        )
 
         return {
             "loss": total_loss / len(val_loader),
@@ -869,22 +960,25 @@ class ASTTrainer:
             self.metrics.learning_rate = self.optimizer.param_groups[0]["lr"]
 
             # Save history
-            self.history.append({
-                "epoch": epoch,
-                "train_loss": train_loss,
-                "train_acc": train_acc,
-                "val_loss": val_metrics["loss"],
-                "val_acc": val_metrics["accuracy"],
-                "val_f1": val_metrics["f1"],
-                "lr": self.metrics.learning_rate,
-            })
+            self.history.append(
+                {
+                    "epoch": epoch,
+                    "train_loss": train_loss,
+                    "train_acc": train_acc,
+                    "val_loss": val_metrics["loss"],
+                    "val_acc": val_metrics["accuracy"],
+                    "val_f1": val_metrics["f1"],
+                    "lr": self.metrics.learning_rate,
+                }
+            )
 
             # Check for improvement
             if val_metrics["loss"] < self.metrics.best_val_loss - self.config.min_delta:
                 self.metrics.best_val_loss = val_metrics["loss"]
                 self.metrics.epochs_without_improvement = 0
                 best_model_state = {
-                    k: v.cpu().clone() for k, v in self.model.classifier.state_dict().items()
+                    k: v.cpu().clone()
+                    for k, v in self.model.classifier.state_dict().items()
                 }
             else:
                 self.metrics.epochs_without_improvement += 1
@@ -939,7 +1033,7 @@ class ASTTrainer:
 
         # Save model
         model_path = model_dir / "model.pt"
-        
+
         save_metadata = {
             "training_config": {
                 "batch_size": self.config.batch_size,
@@ -954,7 +1048,7 @@ class ASTTrainer:
             },
             "data_stats": self.data_stats,
         }
-        
+
         if metadata:
             save_metadata.update(metadata)
 
@@ -1047,7 +1141,11 @@ def calibrate_threshold(
         accuracy = (tp + tn) / len(all_labels)
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        f1 = (
+            2 * precision * recall / (precision + recall)
+            if (precision + recall) > 0
+            else 0.0
+        )
 
         metrics_list.append(
             ThresholdMetrics(

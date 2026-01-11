@@ -23,7 +23,13 @@ from fastapi.responses import StreamingResponse
 from ...config import Config
 from ...audio.real_data_loader import RealNegativeDataLoader
 from ...models.trainer import ASTTrainer, TrainingConfig, calibrate_threshold
-from ..jobs import PHASE_DESCRIPTIONS, JobInfo, JobStatus, TrainingProgress, get_job_manager
+from ..jobs import (
+    PHASE_DESCRIPTIONS,
+    JobInfo,
+    JobStatus,
+    TrainingProgress,
+    get_job_manager,
+)
 from ..schemas import (
     ErrorResponse,
     JobStatus as SchemaJobStatus,
@@ -121,7 +127,9 @@ def run_training_job(
         hyperparams = job.hyperparameters or {}
         config = TrainingConfig(
             # Classifier settings
-            classifier_hidden_dims=hyperparams.get("classifier_hidden_dims", [256, 128]),
+            classifier_hidden_dims=hyperparams.get(
+                "classifier_hidden_dims", [256, 128]
+            ),
             classifier_dropout=hyperparams.get("dropout", 0.5),
             freeze_base=True,  # Always freeze AST base model
             # Training settings
@@ -129,7 +137,9 @@ def run_training_job(
             num_epochs=hyperparams.get("num_epochs", 100),
             learning_rate=hyperparams.get("learning_rate", 1e-4),
             weight_decay=hyperparams.get("weight_decay", 1e-3),
-            patience=hyperparams.get("patience", hyperparams.get("early_stopping_patience", 8)),
+            patience=hyperparams.get(
+                "patience", hyperparams.get("early_stopping_patience", 8)
+            ),
             # Regularization (higher values prevent false positives)
             label_smoothing=hyperparams.get("label_smoothing", 0.25),
             mixup_alpha=hyperparams.get("mixup_alpha", 0.5),
@@ -146,7 +156,9 @@ def run_training_job(
             use_tts_positives=hyperparams.get("use_tts_positives", True),
             use_real_negatives=hyperparams.get("use_real_negatives", True),
             max_real_negatives=hyperparams.get("max_real_negatives", 0),
-            use_hard_negatives=hyperparams.get("use_hard_negatives", True),  # Critical for accuracy
+            use_hard_negatives=hyperparams.get(
+                "use_hard_negatives", True
+            ),  # Critical for accuracy
             # Negative ratios (when max_real_negatives=0) - defaults match UI
             negative_ratio=float(hyperparams.get("negative_ratio", 2.0)),
             hard_negative_ratio=float(hyperparams.get("hard_negative_ratio", 4.0)),
@@ -156,7 +168,9 @@ def run_training_job(
         trainer = ASTTrainer(config=config, output_dir=output_dir)
 
         # Phase 3: Data augmentation - Loading AST model
-        job.update_status(JobStatus.AUGMENTING, "Loading AST model and feature extractor...")
+        job.update_status(
+            JobStatus.AUGMENTING, "Loading AST model and feature extractor..."
+        )
 
         # Phase 4: Generate negatives (handled in prepare_data)
         # The prepare_data function will update progress via callback
@@ -167,7 +181,7 @@ def run_training_job(
             job.message = message
             job.progress_percent = progress_percent
             job.updated_at = datetime.now()
-        
+
         job.update_status(JobStatus.GENERATING_NEGATIVES, "Starting data generation...")
 
         # Prepare data with progress callback
@@ -180,8 +194,9 @@ def run_training_job(
         )
 
         # Store data stats in job for UI
-        if hasattr(trainer, 'data_stats') and trainer.data_stats:
+        if hasattr(trainer, "data_stats") and trainer.data_stats:
             from ..jobs import DataStats
+
             job.training_progress = job.training_progress or TrainingProgress()
             job.training_progress.data_stats = DataStats(
                 num_recordings=trainer.data_stats.get("num_recordings", 0),
@@ -193,7 +208,9 @@ def run_training_job(
             print(f"[DEBUG] Data stats set: {job.training_progress.data_stats}")
 
         # Phase 5: Training
-        job.update_status(JobStatus.TRAINING, "Training classifier on AST embeddings...")
+        job.update_status(
+            JobStatus.TRAINING, "Training classifier on AST embeddings..."
+        )
 
         # Create model and setup training
         trainer.model = trainer.create_model()
@@ -239,7 +256,8 @@ def run_training_job(
                 trainer.metrics.best_val_loss = val_metrics["loss"]
                 trainer.metrics.epochs_without_improvement = 0
                 best_model_state = {
-                    k: v.cpu().clone() for k, v in trainer.model.classifier.state_dict().items()
+                    k: v.cpu().clone()
+                    for k, v in trainer.model.classifier.state_dict().items()
                 }
             else:
                 trainer.metrics.epochs_without_improvement += 1
@@ -347,6 +365,7 @@ def run_training_job(
 # Negative Data Cache Endpoints
 # ============================================================================
 
+
 @router.get(
     "/negative-cache/info",
     summary="Get Negative Data Cache Info",
@@ -357,7 +376,7 @@ async def get_negative_cache_info():
     loader = RealNegativeDataLoader()
     cache_info = loader.get_cache_info()
     file_counts = loader.get_file_count()
-    
+
     return {
         "cached": cache_info["cached"],
         "chunk_count": cache_info["chunk_count"],
@@ -377,22 +396,21 @@ async def build_negative_cache(
 ):
     """Build the negative data cache."""
     import threading
-    
+
     loader = RealNegativeDataLoader()
-    
+
     if not loader.available:
         raise HTTPException(
-            status_code=404,
-            detail="No negative data found in data/negative/ directory"
+            status_code=404, detail="No negative data found in data/negative/ directory"
         )
-    
+
     # Run in background thread
     def build():
         loader.build_cache(max_workers=max_workers)
-    
+
     thread = threading.Thread(target=build, daemon=True)
     thread.start()
-    
+
     file_counts = loader.get_file_count()
     return {
         "message": "Cache building started in background",
@@ -458,60 +476,92 @@ async def start_training(
     ] = None,
     # Regularization hyperparameters (balanced defaults)
     dropout: Annotated[
-        Optional[float], Form(description="Dropout probability (default: 0.5)", ge=0, le=0.7)
+        Optional[float],
+        Form(description="Dropout probability (default: 0.5)", ge=0, le=0.7),
     ] = None,
     label_smoothing: Annotated[
-        Optional[float], Form(description="Label smoothing factor (default: 0.25)", ge=0, le=0.4)
+        Optional[float],
+        Form(description="Label smoothing factor (default: 0.25)", ge=0, le=0.4),
     ] = None,
     weight_decay: Annotated[
-        Optional[float], Form(description="L2 regularization strength (default: 0.001)", ge=0, le=0.5)
+        Optional[float],
+        Form(description="L2 regularization strength (default: 0.001)", ge=0, le=0.5),
     ] = None,
     mixup_alpha: Annotated[
-        Optional[float], Form(description="Mixup augmentation strength (default: 0.5)", ge=0, le=1.0)
+        Optional[float],
+        Form(description="Mixup augmentation strength (default: 0.5)", ge=0, le=1.0),
     ] = None,
     # Model enhancements
     use_focal_loss: Annotated[
-        Optional[bool], Form(description="Use focal loss for hard example mining (default: true)")
+        Optional[bool],
+        Form(description="Use focal loss for hard example mining (default: true)"),
     ] = None,
     focal_alpha: Annotated[
-        Optional[float], Form(description="Focal loss alpha - weight for positive class (default: 0.25)", ge=0.1, le=0.9)
+        Optional[float],
+        Form(
+            description="Focal loss alpha - weight for positive class (default: 0.25)",
+            ge=0.1,
+            le=0.9,
+        ),
     ] = None,
     focal_gamma: Annotated[
-        Optional[float], Form(description="Focal loss gamma (default: 2.0)", ge=0.5, le=5.0)
+        Optional[float],
+        Form(description="Focal loss gamma (default: 2.0)", ge=0.5, le=5.0),
     ] = None,
     use_attention: Annotated[
-        Optional[bool], Form(description="Use self-attention in classifier (default: false)")
+        Optional[bool],
+        Form(description="Use self-attention in classifier (default: false)"),
     ] = None,
     use_se_block: Annotated[
-        Optional[bool], Form(description="Use Squeeze-and-Excitation block for channel attention (default: false)")
+        Optional[bool],
+        Form(
+            description="Use Squeeze-and-Excitation block for channel attention (default: false)"
+        ),
     ] = None,
     use_tcn: Annotated[
-        Optional[bool], Form(description="Use Temporal Convolutional Network block (default: false)")
+        Optional[bool],
+        Form(description="Use Temporal Convolutional Network block (default: false)"),
     ] = None,
     classifier_hidden_dims: Annotated[
-        Optional[str], Form(description="Classifier hidden dims as JSON array (default: [256, 128])")
+        Optional[str],
+        Form(description="Classifier hidden dims as JSON array (default: [256, 128])"),
     ] = None,
     # Data generation settings
     target_positive_samples: Annotated[
-        Optional[int], Form(description="Target positive samples (default: 6000)", ge=100, le=20000)
+        Optional[int],
+        Form(description="Target positive samples (default: 6000)", ge=100, le=20000),
     ] = None,
     use_tts_positives: Annotated[
-        Optional[bool], Form(description="Generate TTS positive samples (default: true)")
+        Optional[bool],
+        Form(description="Generate TTS positive samples (default: true)"),
     ] = None,
     use_real_negatives: Annotated[
-        Optional[bool], Form(description="Use real negative data from data/negative/ (default: true)")
+        Optional[bool],
+        Form(description="Use real negative data from data/negative/ (default: true)"),
     ] = None,
     max_real_negatives: Annotated[
-        Optional[int], Form(description="Max real negative samples (0 = no limit)", ge=0, le=100000)
+        Optional[int],
+        Form(description="Max real negative samples (0 = no limit)", ge=0, le=100000),
     ] = None,
     use_hard_negatives: Annotated[
-        Optional[bool], Form(description="Generate hard negatives from similar-sounding words (default: true)")
+        Optional[bool],
+        Form(
+            description="Generate hard negatives from similar-sounding words (default: true)"
+        ),
     ] = None,
     negative_ratio: Annotated[
-        Optional[float], Form(description="Negative:Positive ratio for real negatives (default: 2.0)", ge=0.5, le=10.0)
+        Optional[float],
+        Form(
+            description="Negative:Positive ratio for real negatives (default: 2.0)",
+            ge=0.5,
+            le=10.0,
+        ),
     ] = None,
     hard_negative_ratio: Annotated[
-        Optional[float], Form(description="Hard negative:Positive ratio (default: 4.0)", ge=0.5, le=10.0)
+        Optional[float],
+        Form(
+            description="Hard negative:Positive ratio (default: 4.0)", ge=0.5, le=10.0
+        ),
     ] = None,
 ) -> TrainingStartResponse:
     """
@@ -568,12 +618,12 @@ async def start_training(
     except HTTPException:
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise
-    
+
     # Save recordings to model-specific directory
     model_id = wake_word.lower().replace(" ", "_")
     recordings_dir = Config.RECORDINGS_DIR / model_id
     recordings_dir.mkdir(parents=True, exist_ok=True)
-    
+
     for i, (content, filename) in enumerate(raw_recordings):
         # Use consistent naming: recording_001.wav, recording_002.wav, etc.
         ext = Path(filename).suffix or ".wav"
@@ -613,7 +663,9 @@ async def start_training(
         hyperparameters["use_tcn"] = use_tcn
     if classifier_hidden_dims is not None:
         try:
-            hyperparameters["classifier_hidden_dims"] = json.loads(classifier_hidden_dims)
+            hyperparameters["classifier_hidden_dims"] = json.loads(
+                classifier_hidden_dims
+            )
         except json.JSONDecodeError:
             pass  # Use default if parsing fails
     # Data generation settings
@@ -700,13 +752,15 @@ async def get_training_status(job_id: str) -> TrainingStatusResponse:
                 num_val_samples=ds.num_val_samples,
             )
         else:
-            print(f"[DEBUG] No data_stats in training_progress")
-        
+            print("[DEBUG] No data_stats in training_progress")
+
         # Handle inf values that can't be JSON serialized
         best_val_loss = job.training_progress.best_val_loss
-        if best_val_loss == float('inf') or best_val_loss != best_val_loss:  # Check for inf or nan
+        if (
+            best_val_loss == float("inf") or best_val_loss != best_val_loss
+        ):  # Check for inf or nan
             best_val_loss = 999.0  # Use a large but valid number
-        
+
         training_progress = TrainingProgressSchema(
             current_epoch=job.training_progress.current_epoch,
             total_epochs=job.training_progress.total_epochs,
@@ -735,8 +789,12 @@ async def get_training_status(job_id: str) -> TrainingStatusResponse:
     schema_status = SchemaJobStatus(job.status.value)
 
     # Use dynamic message if available, otherwise fall back to static phase description
-    current_phase = job.message if job.message else PHASE_DESCRIPTIONS.get(job.status, str(job.status))
-    
+    current_phase = (
+        job.message
+        if job.message
+        else PHASE_DESCRIPTIONS.get(job.status, str(job.status))
+    )
+
     return TrainingStatusResponse(
         job_id=job.job_id,
         status=schema_status,

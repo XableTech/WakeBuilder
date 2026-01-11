@@ -108,18 +108,26 @@ class TrainingHyperparameters(BaseModel):
         default=1e-4, ge=0, le=0.5, description="L2 regularization strength"
     )
     label_smoothing: float = Field(
-        default=0.05, ge=0, le=0.3, description="Label smoothing factor (lower = more confident)"
+        default=0.05,
+        ge=0,
+        le=0.3,
+        description="Label smoothing factor (lower = more confident)",
     )
     spec_augment: bool = Field(
         default=True, description="Enable SpecAugment (time/frequency masking)"
     )
     mixup_alpha: float = Field(
-        default=0.1, ge=0, le=1.0, description="Mixup augmentation strength (lower = preserve patterns)"
+        default=0.1,
+        ge=0,
+        le=1.0,
+        description="Mixup augmentation strength (lower = preserve patterns)",
     )
     # Data generation settings
     target_positive_samples: int = Field(
-        default=6000, ge=100, le=20000, 
-        description="Target number of positive samples to generate from recordings"
+        default=6000,
+        ge=100,
+        le=20000,
+        description="Target number of positive samples to generate from recordings",
     )
     use_tts_positives: bool = Field(
         default=True, description="Generate additional positive samples using TTS"
@@ -128,8 +136,10 @@ class TrainingHyperparameters(BaseModel):
         default=True, description="Use real negative data from data/negative/ directory"
     )
     max_real_negatives: int = Field(
-        default=0, ge=0, le=100000,
-        description="Maximum real negative samples (0 = no limit, use all)"
+        default=0,
+        ge=0,
+        le=100000,
+        description="Maximum real negative samples (0 = no limit, use all)",
     )
 
 
@@ -156,9 +166,11 @@ class EpochMetrics(BaseModel):
 
 class DataStats(BaseModel):
     """Statistics about training data."""
-    
+
     num_recordings: int = Field(0, description="Number of original recordings")
-    num_positive_samples: int = Field(0, description="Total positive samples after augmentation")
+    num_positive_samples: int = Field(
+        0, description="Total positive samples after augmentation"
+    )
     num_negative_samples: int = Field(0, description="Total negative samples generated")
     num_train_samples: int = Field(0, description="Training set size")
     num_val_samples: int = Field(0, description="Validation set size")

@@ -8,6 +8,7 @@ This module provides endpoints for:
 
 import io
 import json
+import logging
 import time
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +36,7 @@ from ..schemas import (
     TestFileResponse,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -58,6 +60,7 @@ class ModelLoader:
         """Get or create AST feature extractor."""
         if self._ast_feature_extractor is None:
             from transformers import AutoFeatureExtractor
+
             self._ast_feature_extractor = AutoFeatureExtractor.from_pretrained(
                 AST_MODEL_CHECKPOINT
             )
@@ -67,7 +70,7 @@ class ModelLoader:
         """Find the model file path."""
         ext = f".{format}"
         filename = f"model{ext}"
-        
+
         # Check custom models first
         custom_path = Config.CUSTOM_MODELS_DIR / model_id / filename
         if custom_path.exists():
@@ -79,7 +82,7 @@ class ModelLoader:
             return default_path
 
         return None
-    
+
     def has_onnx_model(self, model_id: str) -> bool:
         """Check if ONNX model exists for given model_id."""
         return self._find_model_path(model_id, "onnx") is not None
@@ -106,23 +109,25 @@ class ModelLoader:
             device = "cpu"
         if device == "cuda" and not torch.cuda.is_available():
             device = "cpu"
-        
+
         if device != self._current_device:
             self._current_device = device
             # Clear cache to reload models on new device
             self.clear_cache()
-    
+
     def get_device(self) -> str:
         """Get current device."""
         return self._current_device
-    
+
     def get_device_info(self) -> dict:
         """Get device availability info."""
         cuda_available = torch.cuda.is_available()
         return {
             "current_device": self._current_device,
             "cuda_available": cuda_available,
-            "cuda_device_name": torch.cuda.get_device_name(0) if cuda_available else None,
+            "cuda_device_name": (
+                torch.cuda.get_device_name(0) if cuda_available else None
+            ),
         }
 
     def load_model(self, model_id: str) -> tuple[torch.nn.Module, dict]:
@@ -152,26 +157,27 @@ class ModelLoader:
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
         # Check if this is an AST model (new format) or legacy model
-        is_ast_model = (
-            "classifier_state_dict" in checkpoint or 
-            checkpoint.get("base_model", "").startswith("MIT/ast")
-        )
+        is_ast_model = "classifier_state_dict" in checkpoint or checkpoint.get(
+            "base_model", ""
+        ).startswith("MIT/ast")
 
         if is_ast_model:
             # Load AST-based model
             model = ASTWakeWordModel(
                 freeze_base=True,
-                classifier_hidden_dims=checkpoint.get("classifier_hidden_dims", [256, 128]),
+                classifier_hidden_dims=checkpoint.get(
+                    "classifier_hidden_dims", [256, 128]
+                ),
                 classifier_dropout=checkpoint.get("classifier_dropout", 0.3),
                 use_attention=checkpoint.get("use_attention", False),
                 use_se_block=checkpoint.get("use_se_block", False),
                 use_tcn=checkpoint.get("use_tcn", False),
             )
-            
+
             # Load classifier weights
             if "classifier_state_dict" in checkpoint:
                 model.classifier.load_state_dict(checkpoint["classifier_state_dict"])
-            
+
             model = model.to(device)
             model.eval()
         else:
@@ -199,11 +205,11 @@ class ModelLoader:
         """Clear the model cache."""
         self._cache.clear()
         self._onnx_cache.clear()
-    
+
     def load_onnx_model(self, model_id: str) -> tuple[any, dict]:
         """
         Load an ONNX model by ID, using cache if available.
-        
+
         Returns:
             Tuple of (onnx_session, metadata)
         """
@@ -212,12 +218,12 @@ class ModelLoader:
             session, metadata, _ = self._onnx_cache[model_id]
             self._onnx_cache[model_id] = (session, metadata, time.time())
             return session, metadata
-        
+
         # Find ONNX model path
         onnx_path = self._find_model_path(model_id, "onnx")
         if not onnx_path:
             raise FileNotFoundError(f"ONNX model not found: {model_id}")
-        
+
         # Load ONNX model
         try:
             import onnxruntime as ort
@@ -226,26 +232,28 @@ class ModelLoader:
                 "onnxruntime is required for ONNX inference. "
                 "Install with: pip install onnxruntime"
             )
-        
+
         # Create session with appropriate provider
-        providers = ['CPUExecutionProvider']
+        providers = ["CPUExecutionProvider"]
         if self._current_device == "cuda":
-            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-        
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
         session = ort.InferenceSession(str(onnx_path), providers=providers)
-        
+
         # Load metadata
         metadata = self._load_metadata(model_id)
         metadata["is_onnx_model"] = True
         metadata["is_ast_model"] = True  # ONNX models are exported from AST
-        
+
         # Add to cache
         if len(self._onnx_cache) >= self._max_cache_size:
-            oldest_id = min(self._onnx_cache.keys(), key=lambda k: self._onnx_cache[k][2])
+            oldest_id = min(
+                self._onnx_cache.keys(), key=lambda k: self._onnx_cache[k][2]
+            )
             del self._onnx_cache[oldest_id]
-        
+
         self._onnx_cache[model_id] = (session, metadata, time.time())
-        
+
         return session, metadata
 
 
@@ -261,10 +269,12 @@ def get_model_loader() -> ModelLoader:
     return _model_loader
 
 
-def spectral_gate_denoise(audio: np.ndarray, sample_rate: int, threshold_db: float = -30) -> np.ndarray:
+def spectral_gate_denoise(
+    audio: np.ndarray, sample_rate: int, threshold_db: float = -30
+) -> np.ndarray:
     """
     Apply spectral gating for noise reduction using proper STFT with overlap-add.
-    
+
     This technique:
     1. Computes the STFT of the audio with proper windowing
     2. Estimates noise floor from quiet parts
@@ -275,101 +285,101 @@ def spectral_gate_denoise(audio: np.ndarray, sample_rate: int, threshold_db: flo
     n_fft = 512
     hop_length = 128
     window = np.hanning(n_fft)
-    
+
     # Pad audio to ensure we can process all samples
     pad_length = n_fft - (len(audio) % hop_length)
-    audio_padded = np.pad(audio, (0, pad_length), mode='constant')
-    
+    audio_padded = np.pad(audio, (0, pad_length), mode="constant")
+
     # Compute number of frames
     num_frames = 1 + (len(audio_padded) - n_fft) // hop_length
-    
+
     # Extract frames with windowing
     frames = np.zeros((num_frames, n_fft))
     for i in range(num_frames):
         start = i * hop_length
-        frames[i] = audio_padded[start:start + n_fft] * window
-    
+        frames[i] = audio_padded[start : start + n_fft] * window
+
     # Compute FFT for each frame
     stft = np.fft.rfft(frames, axis=1)
     magnitude = np.abs(stft)
     phase = np.angle(stft)
-    
+
     # Estimate noise floor from the quietest 20% of frames (by total energy)
-    frame_energies = np.sum(magnitude ** 2, axis=1)
+    frame_energies = np.sum(magnitude**2, axis=1)
     noise_percentile = 20
     noise_threshold_idx = int(len(frame_energies) * noise_percentile / 100)
-    quiet_frame_indices = np.argsort(frame_energies)[:max(1, noise_threshold_idx)]
+    quiet_frame_indices = np.argsort(frame_energies)[: max(1, noise_threshold_idx)]
     noise_floor = np.mean(magnitude[quiet_frame_indices], axis=0)
-    
+
     # Apply soft threshold (spectral subtraction with over-subtraction factor)
     over_subtraction = 2.0  # More aggressive noise removal
     threshold_linear = 10 ** (threshold_db / 20)
     noise_estimate = noise_floor * over_subtraction * threshold_linear
-    
+
     # Wiener-like soft mask
     mask = np.maximum(0, 1 - (noise_estimate / (magnitude + 1e-10)) ** 2)
     mask = np.sqrt(mask)  # Smooth the mask
-    
+
     # Apply mask and reconstruct
     cleaned_stft = magnitude * mask * np.exp(1j * phase)
     cleaned_frames = np.fft.irfft(cleaned_stft, n=n_fft, axis=1)
-    
+
     # Overlap-add reconstruction
     output_length = len(audio_padded)
     output = np.zeros(output_length)
     window_sum = np.zeros(output_length)
-    
+
     for i in range(num_frames):
         start = i * hop_length
-        output[start:start + n_fft] += cleaned_frames[i] * window
-        window_sum[start:start + n_fft] += window ** 2
-    
+        output[start : start + n_fft] += cleaned_frames[i] * window
+        window_sum[start : start + n_fft] += window**2
+
     # Normalize by window sum (avoid division by zero)
     window_sum = np.maximum(window_sum, 1e-10)
     output = output / window_sum
-    
+
     # Trim to original length
-    cleaned = output[:len(audio)]
-    
+    cleaned = output[: len(audio)]
+
     return cleaned.astype(np.float32)
 
 
 def compute_spectral_features(audio: np.ndarray, sample_rate: int) -> dict:
     """
     Compute advanced spectral features to distinguish speech from non-speech sounds.
-    
+
     Key insight: Speech has MULTIPLE formant peaks and temporal variation,
     while screams/laughs/whistles are more tonal (single peak) or impulsive.
     """
     n_fft = min(2048, len(audio))
     spectrum = np.abs(np.fft.rfft(audio, n=n_fft))
     freqs = np.fft.rfftfreq(n_fft, 1.0 / sample_rate)
-    
+
     # Basic features
     spectrum_sum = np.sum(spectrum) + 1e-10
     centroid = np.sum(freqs * spectrum) / spectrum_sum
-    
+
     # Spectral flatness
     log_spectrum = np.log(spectrum + 1e-10)
     geometric_mean = np.exp(np.mean(log_spectrum))
     arithmetic_mean = np.mean(spectrum) + 1e-10
     flatness = geometric_mean / arithmetic_mean
-    
+
     # Zero crossing rate
     zero_crossings = np.sum(np.abs(np.diff(np.sign(audio)))) / 2
     zcr = zero_crossings / len(audio)
-    
+
     # Spectral rolloff
-    cumsum = np.cumsum(spectrum ** 2)
+    cumsum = np.cumsum(spectrum**2)
     rolloff_threshold = 0.85 * cumsum[-1]
     rolloff_idx = np.searchsorted(cumsum, rolloff_threshold)
     rolloff = freqs[min(rolloff_idx, len(freqs) - 1)]
-    
+
     # Spectral bandwidth
     bandwidth = np.sqrt(np.sum(((freqs - centroid) ** 2) * spectrum) / spectrum_sum)
-    
+
     # === NEW: Spectral complexity features ===
-    
+
     # 1. Count significant spectral peaks (speech has 3-5 formants)
     # Normalize spectrum for peak detection
     spectrum_norm = spectrum / (np.max(spectrum) + 1e-10)
@@ -377,50 +387,54 @@ def compute_spectral_features(audio: np.ndarray, sample_rate: int) -> dict:
     peak_threshold = 0.2
     peaks = []
     for i in range(1, len(spectrum_norm) - 1):
-        if (spectrum_norm[i] > spectrum_norm[i-1] and 
-            spectrum_norm[i] > spectrum_norm[i+1] and
-            spectrum_norm[i] > peak_threshold):
+        if (
+            spectrum_norm[i] > spectrum_norm[i - 1]
+            and spectrum_norm[i] > spectrum_norm[i + 1]
+            and spectrum_norm[i] > peak_threshold
+        ):
             peaks.append(i)
     num_peaks = len(peaks)
-    
+
     # 2. Spectral entropy (speech has moderate entropy, pure tones have low)
     spectrum_prob = spectrum / spectrum_sum
     spectral_entropy = -np.sum(spectrum_prob * np.log(spectrum_prob + 1e-10))
     max_entropy = np.log(len(spectrum))
     normalized_entropy = spectral_entropy / max_entropy
-    
+
     # 3. Peak concentration - ratio of energy in top peak vs total
     # Pure tones have high concentration, speech has distributed energy
     sorted_spectrum = np.sort(spectrum)[::-1]
     top_energy = np.sum(sorted_spectrum[:10])  # Top 10 bins
     total_energy = np.sum(spectrum) + 1e-10
     peak_concentration = top_energy / total_energy
-    
+
     # 4. Temporal variation - compute spectrum in 4 segments and measure variance
     segment_len = len(audio) // 4
     segment_centroids = []
     for i in range(4):
-        seg = audio[i * segment_len:(i + 1) * segment_len]
+        seg = audio[i * segment_len : (i + 1) * segment_len]
         seg_spec = np.abs(np.fft.rfft(seg, n=n_fft // 2))
         seg_freqs = np.fft.rfftfreq(n_fft // 2, 1.0 / sample_rate)
         seg_sum = np.sum(seg_spec) + 1e-10
         seg_centroid = np.sum(seg_freqs * seg_spec) / seg_sum
         segment_centroids.append(seg_centroid)
-    temporal_variation = np.std(segment_centroids) / (np.mean(segment_centroids) + 1e-10)
-    
+    temporal_variation = np.std(segment_centroids) / (
+        np.mean(segment_centroids) + 1e-10
+    )
+
     # 5. Formant-like structure: check for energy in typical formant regions
     # F1: 200-900 Hz, F2: 900-2500 Hz, F3: 2500-3500 Hz
     f1_mask = (freqs >= 200) & (freqs <= 900)
     f2_mask = (freqs >= 900) & (freqs <= 2500)
     f3_mask = (freqs >= 2500) & (freqs <= 3500)
-    
+
     f1_energy = np.sum(spectrum[f1_mask]) / total_energy if np.any(f1_mask) else 0
     f2_energy = np.sum(spectrum[f2_mask]) / total_energy if np.any(f2_mask) else 0
     f3_energy = np.sum(spectrum[f3_mask]) / total_energy if np.any(f3_mask) else 0
-    
+
     # Speech typically has energy distributed across F1, F2, F3
     formant_balance = min(f1_energy, f2_energy) / (max(f1_energy, f2_energy) + 1e-10)
-    
+
     return {
         "centroid": centroid,
         "flatness": flatness,
@@ -441,23 +455,23 @@ def compute_spectral_features(audio: np.ndarray, sample_rate: int) -> dict:
 def is_speech_like(audio: np.ndarray, sample_rate: int) -> tuple[bool, float]:
     """
     Determine if audio has speech-like characteristics using advanced analysis.
-    
+
     Key discriminators:
     - Speech has MULTIPLE spectral peaks (formants) - screams/whistles have 1-2
     - Speech has temporal variation in spectrum - pure tones are constant
     - Speech has energy distributed across formant regions
     - Speech has moderate spectral entropy - not too tonal, not noise
-    
+
     Returns:
         Tuple of (is_speech_like, speech_score)
     """
     features = compute_spectral_features(audio, sample_rate)
-    
+
     score = 0.0
     penalties = 0.0
-    
+
     # === Primary discriminators (most important) ===
-    
+
     # 1. Number of spectral peaks (CRITICAL: speech has 3+ formants)
     num_peaks = features["num_peaks"]
     if num_peaks >= 4:
@@ -466,7 +480,7 @@ def is_speech_like(audio: np.ndarray, sample_rate: int) -> tuple[bool, float]:
         score += 0.15
     elif num_peaks <= 1:
         penalties += 0.3  # Single peak = likely tonal (scream, whistle, hum)
-    
+
     # 2. Peak concentration (CRITICAL: speech energy is distributed)
     peak_conc = features["peak_concentration"]
     if peak_conc > 0.8:
@@ -475,7 +489,7 @@ def is_speech_like(audio: np.ndarray, sample_rate: int) -> tuple[bool, float]:
         penalties += 0.15
     elif peak_conc < 0.4:
         score += 0.15  # Well distributed = speech-like
-    
+
     # 3. Temporal variation (speech changes over time)
     temp_var = features["temporal_variation"]
     if temp_var > 0.15:
@@ -484,14 +498,14 @@ def is_speech_like(audio: np.ndarray, sample_rate: int) -> tuple[bool, float]:
         score += 0.1
     elif temp_var < 0.03:
         penalties += 0.15  # Too constant = sustained tone
-    
+
     # 4. Formant balance (speech has energy in multiple formant regions)
     formant_bal = features["formant_balance"]
     if formant_bal > 0.3:
         score += 0.15  # Good balance between F1 and F2
     elif formant_bal < 0.1:
         penalties += 0.1  # Energy too concentrated in one region
-    
+
     # 5. Spectral entropy (speech has moderate complexity)
     entropy = features["spectral_entropy"]
     if 0.4 <= entropy <= 0.75:
@@ -500,9 +514,9 @@ def is_speech_like(audio: np.ndarray, sample_rate: int) -> tuple[bool, float]:
         penalties += 0.2  # Too tonal
     elif entropy > 0.85:
         penalties += 0.1  # Too noisy
-    
+
     # === Secondary features ===
-    
+
     # Spectral flatness (speech is not too flat, not too tonal)
     flatness = features["flatness"]
     if 0.15 <= flatness <= 0.4:
@@ -511,20 +525,20 @@ def is_speech_like(audio: np.ndarray, sample_rate: int) -> tuple[bool, float]:
         penalties += 0.1  # Too tonal
     elif flatness > 0.7:
         penalties += 0.1  # Too noisy
-    
+
     # ZCR check
     zcr = features["zcr"]
     if 0.03 <= zcr <= 0.12:
         score += 0.05
     elif zcr > 0.35:
         penalties += 0.1  # Too high = noise
-    
+
     # Compute final score
     final_score = max(0.0, min(1.0, score - penalties))
-    
+
     # Higher threshold for speech detection (0.5 instead of 0.4)
     is_speech = final_score >= 0.5
-    
+
     return is_speech, final_score
 
 
@@ -536,31 +550,32 @@ def run_onnx_inference(
 ) -> float:
     """
     Run inference using ONNX model.
-    
+
     Args:
         session: ONNX Runtime InferenceSession
         audio: Audio data as numpy array
         sample_rate: Sample rate of the audio
         feature_extractor: AST feature extractor
-        
+
     Returns:
         Confidence score (0-1)
     """
     # Quick silence check
-    rms = np.sqrt(np.mean(audio ** 2))
+    rms = np.sqrt(np.mean(audio**2))
     if rms < 0.005:
         return 0.0
-    
+
     # Normalize audio
     max_val = np.abs(audio).max()
     if max_val > 0.01:
         audio = audio / max_val * 0.9
-    
+
     # Resample to 16kHz if needed
     if sample_rate != 16000:
         import librosa
+
         audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
-    
+
     # Process through AST feature extractor
     inputs = feature_extractor(
         audio,
@@ -568,18 +583,18 @@ def run_onnx_inference(
         return_tensors="np",  # Use numpy for ONNX
     )
     input_values = inputs["input_values"]
-    
+
     # Run ONNX inference
     input_name = session.get_inputs()[0].name
     output_name = session.get_outputs()[0].name
-    
+
     logits = session.run([output_name], {input_name: input_values})[0]
-    
+
     # Apply softmax to get probabilities
     exp_logits = np.exp(logits - np.max(logits, axis=1, keepdims=True))
     probs = exp_logits / np.sum(exp_logits, axis=1, keepdims=True)
     raw_confidence = float(probs[0, 1])
-    
+
     # Use raw confidence directly - trust the model's output
     # The model was trained with real negative data (conversations, music, noise)
     # so it should already discriminate well
@@ -612,10 +627,10 @@ def run_inference(
         Confidence score (0-1)
     """
     # Quick silence check - return 0 for very quiet audio
-    rms = np.sqrt(np.mean(audio ** 2))
+    rms = np.sqrt(np.mean(audio**2))
     if rms < 0.005:
         return 0.0
-    
+
     # Normalize audio to consistent volume level
     max_val = np.abs(audio).max()
     if max_val > 0.01:
@@ -629,8 +644,9 @@ def run_inference(
         # Resample to 16kHz if needed
         if sample_rate != 16000:
             import librosa
+
             audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
-        
+
         # Process through AST feature extractor
         inputs = feature_extractor(
             audio,
@@ -644,7 +660,7 @@ def run_inference(
             outputs = model(input_values)
             probs = F.softmax(outputs, dim=1)
             raw_confidence = probs[0, 1].item()
-        
+
         # Use raw confidence directly - trust the model's output
         # The model was trained with real negative data (conversations, music, noise)
         # so it should already discriminate well
@@ -655,7 +671,7 @@ def run_inference(
         is_speech, speech_score = is_speech_like(audio, sample_rate)
         if not is_speech:
             return 0.0
-        
+
         spec = preprocessor.process_audio(audio, sample_rate)
         spec_tensor = torch.from_numpy(spec).float().unsqueeze(0).to(device)
 
@@ -663,7 +679,7 @@ def run_inference(
             outputs = model(spec_tensor)
             probs = F.softmax(outputs, dim=1)
             raw_confidence = probs[0, 1].item()
-        
+
         # Apply speech score modifier for legacy models
         confidence = raw_confidence * (0.7 + 0.3 * speech_score)
 
@@ -686,7 +702,9 @@ async def get_device_info():
     summary="Set Inference Device",
     description="Set the device for inference (cpu or cuda).",
 )
-async def set_device(device: str = Form(..., description="Device to use: 'cpu' or 'cuda'")):
+async def set_device(
+    device: str = Form(..., description="Device to use: 'cpu' or 'cuda'")
+):
     """Set the device for inference."""
     loader = get_model_loader()
     loader.set_device(device)
@@ -735,17 +753,17 @@ async def test_with_file(
     # Load model
     loader = get_model_loader()
     feature_extractor = loader._get_ast_feature_extractor()
-    
+
     # Determine which model format to use
     using_onnx = False
     if use_onnx and loader.has_onnx_model(model_id):
         try:
             session, metadata = loader.load_onnx_model(model_id)
             using_onnx = True
-        except (FileNotFoundError, ImportError) as e:
+        except (FileNotFoundError, ImportError):
             # Fall back to PyTorch model
             pass
-    
+
     if not using_onnx:
         try:
             model, metadata = loader.load_model(model_id)
@@ -789,7 +807,10 @@ async def test_with_file(
         preprocessor = AudioPreprocessor()
         is_ast = metadata.get("is_ast_model", True)
         confidence = run_inference(
-            model, audio, sr, preprocessor,
+            model,
+            audio,
+            sr,
+            preprocessor,
             feature_extractor=feature_extractor,
             is_ast_model=is_ast,
         )
@@ -876,15 +897,16 @@ async def realtime_testing(websocket: WebSocket) -> None:
 
     # Parse noise reduction flag
     use_noise_reduction = noise_reduction_str.lower() in ("true", "1", "yes")
-    
+
     # Parse ONNX flag
     use_onnx = use_onnx_str.lower() in ("true", "1", "yes")
-    
+
     # Import noisereduce if needed
     nr_reduce_noise = None
     if use_noise_reduction:
         try:
             import noisereduce as nr
+
             nr_reduce_noise = nr.reduce_noise
         except ImportError:
             logger.warning("noisereduce not installed, noise reduction disabled")
@@ -896,19 +918,19 @@ async def realtime_testing(websocket: WebSocket) -> None:
     # Load model
     loader = get_model_loader()
     feature_extractor = loader._get_ast_feature_extractor()
-    
+
     # Determine which model format to use
     using_onnx = False
     onnx_session = None
     model = None
-    
+
     if use_onnx and loader.has_onnx_model(model_id):
         try:
             onnx_session, metadata = loader.load_onnx_model(model_id)
             using_onnx = True
         except (FileNotFoundError, ImportError):
             pass
-    
+
     if not using_onnx:
         try:
             model, metadata = loader.load_model(model_id)
@@ -993,7 +1015,10 @@ async def realtime_testing(websocket: WebSocket) -> None:
                         )
                     else:
                         confidence = run_inference(
-                            model, chunk, sample_rate, preprocessor,
+                            model,
+                            chunk,
+                            sample_rate,
+                            preprocessor,
                             feature_extractor=feature_extractor,
                             is_ast_model=is_ast,
                         )
@@ -1002,9 +1027,9 @@ async def realtime_testing(websocket: WebSocket) -> None:
                     # Check for detection with cooldown
                     current_time = time.time()
                     detected = bool(confidence >= threshold)  # Ensure Python bool
-                    in_cooldown = bool((current_time - last_detection_time) < (
-                        cooldown_ms / 1000
-                    ))
+                    in_cooldown = bool(
+                        (current_time - last_detection_time) < (cooldown_ms / 1000)
+                    )
 
                     if detected and not in_cooldown:
                         last_detection_time = current_time

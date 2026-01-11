@@ -15,20 +15,22 @@ References:
 import gc
 import warnings
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Iterator, Optional
 
 import numpy as np
 
 # Suppress torch RNN dropout warning (Kokoro uses num_layers=1 with dropout)
-warnings.filterwarnings('ignore', message='dropout option adds dropout after all but last recurrent layer')
+warnings.filterwarnings(
+    "ignore", message="dropout option adds dropout after all but last recurrent layer"
+)
 # Suppress Kokoro repo_id default warning (we explicitly set it where possible)
-warnings.filterwarnings('ignore', message='Defaulting repo_id to hexgrad/Kokoro-82M')
+warnings.filterwarnings("ignore", message="Defaulting repo_id to hexgrad/Kokoro-82M")
 
 # Kokoro imports - wrapped in try/except for graceful degradation
 try:
     import torch
     from kokoro import KModel, KPipeline
+
     KOKORO_AVAILABLE = True
 except ImportError:
     KOKORO_AVAILABLE = False
@@ -107,7 +109,7 @@ KOKORO_VOICES = {
 }
 
 # English-only voices for wake word training (most relevant for English wake words)
-KOKORO_ENGLISH_VOICES = {k: v for k, v in KOKORO_VOICES.items() if v[3] in ('a', 'b')}
+KOKORO_ENGLISH_VOICES = {k: v for k, v in KOKORO_VOICES.items() if v[3] in ("a", "b")}
 
 # Speed variations (1.0 = normal, 1.5 = faster)
 KOKORO_SPEED_VARIATIONS = [1.0, 1.5]
@@ -122,11 +124,12 @@ KOKORO_SAMPLE_RATE = 24000
 @dataclass
 class KokoroVoiceInfo:
     """Information about a Kokoro voice."""
+
     voice_id: str
     display_name: str
     gender: str
     accent: str
-    
+
     @property
     def lang_code(self) -> str:
         """Get the language code for this voice."""
@@ -136,37 +139,39 @@ class KokoroVoiceInfo:
 def list_kokoro_voices() -> list[KokoroVoiceInfo]:
     """
     List all available Kokoro voices.
-    
+
     Returns:
         List of KokoroVoiceInfo objects for all voices.
     """
     voices = []
     for voice_id, info in KOKORO_VOICES.items():
         name, gender, accent, lang_code = info
-        voices.append(KokoroVoiceInfo(
-            voice_id=voice_id,
-            display_name=name,
-            gender=gender,
-            accent=accent,
-        ))
+        voices.append(
+            KokoroVoiceInfo(
+                voice_id=voice_id,
+                display_name=name,
+                gender=gender,
+                accent=accent,
+            )
+        )
     return voices
 
 
 class KokoroTTSGenerator:
     """
     Text-to-Speech generator using Kokoro TTS.
-    
+
     This class provides methods to generate high-quality synthetic speech
     with support for 28 English voices (20 American + 8 British) and
     speed variations.
-    
+
     Key features:
     - 28 diverse English voices (male/female, American/British)
     - Speed variations (0.5x and 1.0x)
     - GPU acceleration when available
     - Automatic GPU memory cleanup after generation
     """
-    
+
     def __init__(
         self,
         target_sample_rate: int = 16000,
@@ -174,7 +179,7 @@ class KokoroTTSGenerator:
     ):
         """
         Initialize the Kokoro TTS generator.
-        
+
         Args:
             target_sample_rate: Target sample rate for output audio (default: 16000 Hz)
             use_gpu: Whether to use GPU if available (default: True)
@@ -183,47 +188,47 @@ class KokoroTTSGenerator:
             raise ImportError(
                 "Kokoro TTS is not installed. Install with: uv add kokoro soundfile"
             )
-        
+
         self.target_sample_rate = target_sample_rate
         self._use_gpu = use_gpu and torch.cuda.is_available()
         self._device = "cuda" if self._use_gpu else "cpu"
-        
+
         # Lazy-loaded model and pipelines
         self._model: Optional[KModel] = None
         self._pipelines: dict[str, KPipeline] = {}
         self._voice_packs: dict[str, any] = {}
-        
+
         # Available voices
         self._voices = list_kokoro_voices()
-    
+
     @property
     def is_available(self) -> bool:
         """Check if Kokoro TTS is available."""
         return KOKORO_AVAILABLE
-    
+
     @property
     def voice_ids(self) -> list[str]:
         """Get list of all voice IDs."""
         return list(KOKORO_VOICES.keys())
-    
+
     @property
     def num_voices(self) -> int:
         """Get number of available voices."""
         return len(KOKORO_VOICES)
-    
+
     @property
     def using_gpu(self) -> bool:
         """Check if GPU is being used."""
         return self._use_gpu
-    
+
     def _ensure_model_loaded(self) -> None:
         """Ensure the Kokoro model is loaded."""
         if self._model is None:
             print(f"Loading Kokoro model on {self._device}...")
             # Explicitly pass repo_id to suppress warning
-            self._model = KModel(repo_id='hexgrad/Kokoro-82M').to(self._device).eval()
+            self._model = KModel(repo_id="hexgrad/Kokoro-82M").to(self._device).eval()
             print(f"Kokoro model loaded successfully on {self._device}")
-    
+
     def _get_pipeline(self, voice_id: str) -> KPipeline:
         """Get the appropriate pipeline for a voice, creating if needed."""
         # Get lang_code from voice info or infer from voice_id prefix
@@ -232,13 +237,13 @@ class KokoroTTSGenerator:
             lang_code = voice_info[3]  # 4th element is lang_code
         else:
             lang_code = voice_id[0]  # Fallback to first character
-        
+
         # Create pipeline if not cached
         if lang_code not in self._pipelines:
             self._pipelines[lang_code] = KPipeline(lang_code=lang_code, model=False)
-        
+
         return self._pipelines[lang_code]
-    
+
     def _load_voice_pack(self, voice_id: str) -> any:
         """Load and cache a voice pack."""
         if voice_id not in self._voice_packs:
@@ -247,12 +252,12 @@ class KokoroTTSGenerator:
             # Kokoro uses print() which goes to stdout
             import sys
             import io
-            import os
+
             # Suppress stdout (where Kokoro prints the warning)
             old_stdout = sys.stdout
             sys.stdout = io.StringIO()
             # Also suppress stderr just in case
-            old_stderr = sys.stderr  
+            old_stderr = sys.stderr
             sys.stderr = io.StringIO()
             try:
                 self._voice_packs[voice_id] = pipeline.load_voice(voice_id)
@@ -260,7 +265,7 @@ class KokoroTTSGenerator:
                 sys.stdout = old_stdout
                 sys.stderr = old_stderr
         return self._voice_packs[voice_id]
-    
+
     def synthesize(
         self,
         text: str,
@@ -269,51 +274,53 @@ class KokoroTTSGenerator:
     ) -> tuple[np.ndarray, int]:
         """
         Synthesize speech from text.
-        
+
         Args:
             text: Text to synthesize.
             voice_id: Kokoro voice ID (e.g., 'af_heart', 'am_michael').
             speed: Speed multiplier (0.5 = slower, 1.0 = normal, 2.0 = faster).
-        
+
         Returns:
             Tuple of (audio_samples, sample_rate).
             Audio samples are float32 normalized to [-1, 1].
-        
+
         Raises:
             ValueError: If voice_id is invalid or text is empty.
         """
         if not text or not text.strip():
             raise ValueError("Text cannot be empty")
-        
+
         if voice_id not in KOKORO_VOICES:
-            raise ValueError(f"Unknown voice: {voice_id}. Available: {list(KOKORO_VOICES.keys())}")
-        
+            raise ValueError(
+                f"Unknown voice: {voice_id}. Available: {list(KOKORO_VOICES.keys())}"
+            )
+
         # Ensure model is loaded
         self._ensure_model_loaded()
-        
+
         # Get pipeline and voice pack
         pipeline = self._get_pipeline(voice_id)
         pack = self._load_voice_pack(voice_id)
-        
+
         # Generate audio
         audio_segments = []
         for _, ps, _ in pipeline(text, voice_id, speed):
             ref_s = pack[len(ps) - 1]
             audio = self._model(ps, ref_s, speed)
             audio_segments.append(audio.cpu().numpy())
-        
+
         if not audio_segments:
             raise ValueError(f"Failed to generate audio for text: {text}")
-        
+
         # Concatenate all segments
         audio = np.concatenate(audio_segments)
-        
+
         # Resample if needed
         if KOKORO_SAMPLE_RATE != self.target_sample_rate:
             audio = self._resample(audio, KOKORO_SAMPLE_RATE, self.target_sample_rate)
-        
+
         return audio.astype(np.float32), self.target_sample_rate
-    
+
     def _resample(
         self,
         audio: np.ndarray,
@@ -322,8 +329,9 @@ class KokoroTTSGenerator:
     ) -> np.ndarray:
         """Resample audio to target sample rate."""
         import librosa
+
         return librosa.resample(audio, orig_sr=orig_sr, target_sr=target_sr)
-    
+
     def synthesize_all_voices(
         self,
         text: str,
@@ -332,33 +340,33 @@ class KokoroTTSGenerator:
     ) -> Iterator[tuple[np.ndarray, int, dict]]:
         """
         Generate audio for all voices with speed variations.
-        
+
         Args:
             text: Text to synthesize.
             speeds: List of speed multipliers (default: [0.5, 1.0]).
             voices: List of voice IDs to use (default: all voices).
-        
+
         Yields:
             Tuples of (audio_samples, sample_rate, metadata).
             Metadata includes voice_id, voice_name, gender, accent, speed.
         """
         if speeds is None:
             speeds = KOKORO_SPEED_VARIATIONS
-        
+
         if voices is None:
             voices = self.voice_ids
-        
+
         for voice_id in voices:
             voice_info = KOKORO_VOICES.get(voice_id)
             if voice_info is None:
                 continue
-            
+
             display_name, gender, accent = voice_info
-            
+
             for speed in speeds:
                 try:
                     audio, sr = self.synthesize(text, voice_id=voice_id, speed=speed)
-                    
+
                     metadata = {
                         "voice_id": voice_id,
                         "voice_name": display_name,
@@ -368,32 +376,34 @@ class KokoroTTSGenerator:
                         "text": text,
                         "tts_engine": "kokoro",
                     }
-                    
+
                     yield audio, sr, metadata
-                    
+
                 except Exception as e:
-                    print(f"Warning: Failed to synthesize with {voice_id} at speed {speed}: {e}")
+                    print(
+                        f"Warning: Failed to synthesize with {voice_id} at speed {speed}: {e}"
+                    )
                     continue
-    
+
     def cleanup(self) -> None:
         """
         Clean up GPU memory and resources.
-        
+
         Call this after generating all samples to free GPU memory
         before training.
         """
         if self._model is not None:
             del self._model
             self._model = None
-        
+
         self._pipelines.clear()
         self._voice_packs.clear()
-        
+
         if self._use_gpu and torch is not None:
             torch.cuda.empty_cache()
             gc.collect()
             print("Kokoro TTS: GPU memory cleaned up")
-    
+
     def __del__(self):
         """Destructor to ensure cleanup."""
         try:
@@ -405,10 +415,10 @@ class KokoroTTSGenerator:
 def get_kokoro_sample_count(num_voices: Optional[int] = None) -> int:
     """
     Calculate how many samples will be generated.
-    
+
     Args:
         num_voices: Number of voices to use (default: all 28).
-    
+
     Returns:
         Total number of samples (voices × speed variations).
     """

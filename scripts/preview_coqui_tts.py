@@ -107,31 +107,50 @@ def list_models():
     print("=" * 70)
     print("Available Coqui TTS Models")
     print("=" * 70)
-    
+
     # Group by type
     multi_speaker = {k: v for k, v in COQUI_MODELS.items() if v["multi_speaker"]}
     single_speaker = {k: v for k, v in COQUI_MODELS.items() if not v["multi_speaker"]}
-    
+
     print(f"\n--- Multi-Speaker Models ({len(multi_speaker)}) ---")
     for key, info in multi_speaker.items():
         langs = ", ".join(info["languages"])
         print(f"  {key:18} - {info['description']} [{langs}]")
-    
+
     print(f"\n--- Single-Speaker Models ({len(single_speaker)}) ---")
-    
+
     # Group by language region
-    european = ["german", "french", "spanish", "italian_female", "italian_male", 
-                "dutch", "polish", "hungarian", "finnish", "ukrainian", "bulgarian",
-                "czech", "danish", "greek", "croatian", "romanian", "slovak", 
-                "slovenian", "swedish", "catalan", "portuguese"]
+    european = [
+        "german",
+        "french",
+        "spanish",
+        "italian_female",
+        "italian_male",
+        "dutch",
+        "polish",
+        "hungarian",
+        "finnish",
+        "ukrainian",
+        "bulgarian",
+        "czech",
+        "danish",
+        "greek",
+        "croatian",
+        "romanian",
+        "slovak",
+        "slovenian",
+        "swedish",
+        "catalan",
+        "portuguese",
+    ]
     english = ["ljspeech", "jenny", "tortoise"]
-    
+
     print("\n  English:")
     for key in english:
         if key in single_speaker:
             info = single_speaker[key]
             print(f"    {key:18} - {info['description']}")
-    
+
     print("\n  European Languages:")
     for key in european:
         if key in single_speaker:
@@ -143,23 +162,23 @@ def list_models():
 def list_speakers(model_key: str):
     """List speakers for a specific model."""
     from TTS.api import TTS
-    
+
     if model_key not in COQUI_MODELS:
         print(f"[ERROR] Unknown model: {model_key}")
         return
-    
+
     model_info = COQUI_MODELS[model_key]
     print(f"\nLoading model: {model_info['model_name']}...")
-    
+
     tts = TTS(model_info["model_name"])
-    
+
     if hasattr(tts, "speakers") and tts.speakers:
         print(f"\n--- Speakers ({len(tts.speakers)}) ---")
         for i, speaker in enumerate(tts.speakers):
             print(f"  {i:3d}. {speaker}")
     else:
         print("  Single speaker model (no speaker selection)")
-    
+
     if hasattr(tts, "languages") and tts.languages:
         print(f"\n--- Languages ({len(tts.languages)}) ---")
         for lang in tts.languages:
@@ -176,42 +195,42 @@ def generate_previews(
 ):
     """Generate preview audio samples."""
     from TTS.api import TTS
-    
+
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     print("=" * 70)
     print("Coqui TTS Preview Generator")
     print("=" * 70)
-    print(f"\nText: \"{text}\"")
+    print(f'\nText: "{text}"')
     print(f"Models: {model_keys}")
     print(f"Max speakers per model: {num_speakers}")
     print(f"Language override: {language or 'auto'}")
     print(f"Output: {output_dir}")
     print(f"GPU: {'Enabled' if use_gpu else 'Disabled'}")
-    
+
     start_time = time.time()
     generated = 0
     failed = 0
-    
+
     for model_key in model_keys:
         if model_key not in COQUI_MODELS:
             print(f"\n[WARN] Unknown model: {model_key}, skipping...")
             continue
-        
+
         model_info = COQUI_MODELS[model_key]
         model_name = model_info["model_name"]
-        
-        print(f"\n" + "-" * 70)
+
+        print("\n" + "-" * 70)
         print(f"Model: {model_key} ({model_info['description']})")
         print(f"Loading: {model_name}...")
-        
+
         try:
             tts = TTS(model_name, gpu=use_gpu)
         except Exception as e:
             print(f"[ERROR] Failed to load model: {e}")
             failed += 1
             continue
-        
+
         # Get speakers
         speakers = []
         if hasattr(tts, "speakers") and tts.speakers:
@@ -221,7 +240,7 @@ def generate_previews(
                 speakers = tts.speakers[:num_speakers]
         else:
             speakers = [None]  # Single speaker
-        
+
         # Get languages
         languages = [language] if language else model_info["languages"]
         if hasattr(tts, "languages") and tts.languages:
@@ -229,40 +248,42 @@ def generate_previews(
             languages = [l for l in languages if l in tts.languages]
             if not languages:
                 languages = [tts.languages[0]]  # Default to first
-        
+
         print(f"Speakers: {len(speakers)}, Languages: {languages}")
-        
+
         for speaker in speakers:
             for lang in languages:
                 try:
                     # Build filename - sanitize speaker name (remove newlines, special chars)
                     speaker_str = speaker if speaker else "default"
-                    speaker_str = re.sub(r'[\n\r\t/\\:*?"<>|]', '_', speaker_str).strip()
+                    speaker_str = re.sub(
+                        r'[\n\r\t/\\:*?"<>|]', "_", speaker_str
+                    ).strip()
                     lang_str = lang.replace("-", "_") if lang else "default"
                     filename = f"coqui_{model_key}_{speaker_str}_{lang_str}.wav"
                     filepath = output_dir / filename
-                    
+
                     # Build TTS kwargs
                     kwargs = {"text": text, "file_path": str(filepath)}
                     if speaker:
                         kwargs["speaker"] = speaker
                     if lang and hasattr(tts, "languages") and tts.languages:
                         kwargs["language"] = lang
-                    
+
                     # Generate
                     tts.tts_to_file(**kwargs)
-                    
+
                     # Get duration
                     audio, sr = sf.read(filepath)
                     duration = len(audio) / sr
-                    
+
                     print(f"  [OK] {filename} ({duration:.2f}s)")
                     generated += 1
-                    
+
                 except Exception as e:
                     print(f"  [FAIL] {speaker or 'default'} / {lang}: {e}")
                     failed += 1
-    
+
     # Summary
     elapsed = time.time() - start_time
     print("\n" + "=" * 70)
@@ -272,10 +293,10 @@ def generate_previews(
     print(f"  Failed: {failed}")
     print(f"  Time: {elapsed:.1f}s")
     print(f"  Output: {output_dir}")
-    
+
     if generated > 0:
         print(f"\n[OK] Preview files saved to: {output_dir}")
-    
+
     return generated, failed
 
 
@@ -312,24 +333,28 @@ Examples:
         help="Text to synthesize (default: 'hello world')",
     )
     parser.add_argument(
-        "--model", "-m",
+        "--model",
+        "-m",
         nargs="+",
         default=["vctk"],
         help="Model(s) to use (default: vctk)",
     )
     parser.add_argument(
-        "--num-speakers", "-n",
+        "--num-speakers",
+        "-n",
         type=int,
         default=5,
         help="Max speakers per multi-speaker model (default: 5, use -1 for all)",
     )
     parser.add_argument(
-        "--language", "-l",
+        "--language",
+        "-l",
         type=str,
         help="Language code for multilingual models (e.g., en, fr-fr, pt-br)",
     )
     parser.add_argument(
-        "--output-dir", "-o",
+        "--output-dir",
+        "-o",
         type=Path,
         default=None,
         help="Output directory (default: data/temp/coqui_tts_preview)",
@@ -365,14 +390,14 @@ Examples:
         action="store_true",
         help="Use ALL available models (multi-speaker + European languages)",
     )
-    
+
     args = parser.parse_args()
-    
+
     # List models
     if args.list_models:
         list_models()
         return 0
-    
+
     # List speakers
     if args.list_speakers:
         try:
@@ -381,28 +406,47 @@ Examples:
             print(f"[ERROR] {e}")
             return 1
         return 0
-    
+
     # Determine models to use
     models = args.model
-    
+
     if args.all:
         models = list(COQUI_MODELS.keys())
     elif args.european:
         models = [
-            "german", "french", "spanish", "italian_female", "italian_male",
-            "dutch", "polish", "hungarian", "finnish", "ukrainian", "bulgarian",
-            "czech", "danish", "greek", "croatian", "romanian", "slovak",
-            "slovenian", "swedish", "catalan", "portuguese"
+            "german",
+            "french",
+            "spanish",
+            "italian_female",
+            "italian_male",
+            "dutch",
+            "polish",
+            "hungarian",
+            "finnish",
+            "ukrainian",
+            "bulgarian",
+            "czech",
+            "danish",
+            "greek",
+            "croatian",
+            "romanian",
+            "slovak",
+            "slovenian",
+            "swedish",
+            "catalan",
+            "portuguese",
         ]
     elif args.all_english:
         models = ["vctk", "ljspeech", "jenny"]
-    
+
     # Setup output directory
     if args.output_dir is None:
-        output_dir = Path(__file__).parent.parent / "data" / "temp" / "coqui_tts_preview"
+        output_dir = (
+            Path(__file__).parent.parent / "data" / "temp" / "coqui_tts_preview"
+        )
     else:
         output_dir = args.output_dir
-    
+
     # Generate previews
     try:
         generated, failed = generate_previews(
@@ -421,7 +465,7 @@ Examples:
     except Exception as e:
         print(f"[ERROR] {e}")
         return 1
-    
+
     return 0 if failed == 0 else 1
 
 

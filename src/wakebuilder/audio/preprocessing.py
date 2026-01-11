@@ -68,7 +68,7 @@ def normalize_audio(
 ) -> np.ndarray:
     """
     Normalize audio for consistent input to the model.
-    
+
     CRITICAL: This normalization MUST match between training and inference!
     We use peak normalization (scale to max=0.9) for consistency.
 
@@ -91,7 +91,7 @@ def normalize_audio(
         else:
             normalized = audio
         return normalized.astype(np.float32)
-    
+
     # RMS normalization (legacy, not recommended)
     # Calculate current RMS level
     rms = np.sqrt(np.mean(audio**2))
@@ -210,7 +210,7 @@ class AudioPreprocessor:
     ) -> np.ndarray:
         """
         Process audio into mel spectrogram.
-        
+
         CRITICAL: This preprocessing MUST be identical for training and inference!
         The pipeline is:
         1. Resample to target sample rate (16kHz)

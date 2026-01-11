@@ -62,7 +62,7 @@ def load_model_metadata(
 
         # Get total package size (including ONNX files if present)
         size_kb = model_path.stat().st_size / 1024
-        
+
         # Add ONNX files size if they exist
         onnx_path = model_dir / "model.onnx"
         onnx_data_path = model_dir / "model.onnx.data"
@@ -123,26 +123,26 @@ def load_model_metadata(
 def generate_chart_images(model_dir: Path) -> dict[str, bytes]:
     """
     Generate chart images (loss, accuracy, threshold) for a model.
-    
+
     Args:
         model_dir: Path to model directory
-        
+
     Returns:
         Dictionary mapping filename to PNG image bytes
     """
     import matplotlib
-    matplotlib.use('Agg')  # Non-interactive backend
+
+    matplotlib.use("Agg")  # Non-interactive backend
     import matplotlib.pyplot as plt
-    import numpy as np
-    
+
     charts = {}
-    
+
     # Load training history
     history_path = model_dir / "training_history.json"
     if history_path.exists():
         with open(history_path) as f:
             history_raw = json.load(f)
-        
+
         # Convert list format to dict format if needed
         if isinstance(history_raw, list):
             history = {
@@ -153,71 +153,89 @@ def generate_chart_images(model_dir: Path) -> dict[str, bytes]:
             }
         else:
             history = history_raw
-        
+
         # Generate Loss Chart
         if "train_loss" in history and "val_loss" in history:
             fig, ax = plt.subplots(figsize=(8, 5))
             epochs = range(1, len(history["train_loss"]) + 1)
-            ax.plot(epochs, history["train_loss"], 'b-', label='Train Loss', linewidth=2)
-            ax.plot(epochs, history["val_loss"], 'r-', label='Val Loss', linewidth=2)
-            ax.set_xlabel('Epoch')
-            ax.set_ylabel('Loss')
-            ax.set_title('Loss History')
+            ax.plot(
+                epochs, history["train_loss"], "b-", label="Train Loss", linewidth=2
+            )
+            ax.plot(epochs, history["val_loss"], "r-", label="Val Loss", linewidth=2)
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Loss")
+            ax.set_title("Loss History")
             ax.legend()
             ax.grid(True, alpha=0.3)
-            ax.set_facecolor('#1a1a2e')
-            fig.patch.set_facecolor('#1a1a2e')
-            ax.tick_params(colors='white')
-            ax.xaxis.label.set_color('white')
-            ax.yaxis.label.set_color('white')
-            ax.title.set_color('white')
-            ax.spines['bottom'].set_color('white')
-            ax.spines['top'].set_color('white')
-            ax.spines['left'].set_color('white')
-            ax.spines['right'].set_color('white')
-            
+            ax.set_facecolor("#1a1a2e")
+            fig.patch.set_facecolor("#1a1a2e")
+            ax.tick_params(colors="white")
+            ax.xaxis.label.set_color("white")
+            ax.yaxis.label.set_color("white")
+            ax.title.set_color("white")
+            ax.spines["bottom"].set_color("white")
+            ax.spines["top"].set_color("white")
+            ax.spines["left"].set_color("white")
+            ax.spines["right"].set_color("white")
+
             buf = io.BytesIO()
-            fig.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='#1a1a2e')
+            fig.savefig(
+                buf, format="png", dpi=150, bbox_inches="tight", facecolor="#1a1a2e"
+            )
             buf.seek(0)
-            charts['loss_history.png'] = buf.read()
+            charts["loss_history.png"] = buf.read()
             plt.close(fig)
-        
+
         # Generate Accuracy/F1 Chart
         if "val_accuracy" in history:
             fig, ax = plt.subplots(figsize=(8, 5))
             epochs = range(1, len(history["val_accuracy"]) + 1)
-            ax.plot(epochs, [v * 100 for v in history["val_accuracy"]], 'g-', label='Val Accuracy', linewidth=2)
+            ax.plot(
+                epochs,
+                [v * 100 for v in history["val_accuracy"]],
+                "g-",
+                label="Val Accuracy",
+                linewidth=2,
+            )
             if "val_f1" in history:
-                ax.plot(epochs, [v * 100 for v in history["val_f1"]], 'orange', label='Val F1', linewidth=2)
-            ax.set_xlabel('Epoch')
-            ax.set_ylabel('Percentage (%)')
-            ax.set_title('Accuracy & F1 History')
+                ax.plot(
+                    epochs,
+                    [v * 100 for v in history["val_f1"]],
+                    "orange",
+                    label="Val F1",
+                    linewidth=2,
+                )
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Percentage (%)")
+            ax.set_title("Accuracy & F1 History")
             ax.legend()
             ax.grid(True, alpha=0.3)
             ax.set_ylim(0, 100)
-            ax.set_facecolor('#1a1a2e')
-            fig.patch.set_facecolor('#1a1a2e')
-            ax.tick_params(colors='white')
-            ax.xaxis.label.set_color('white')
-            ax.yaxis.label.set_color('white')
-            ax.title.set_color('white')
-            ax.spines['bottom'].set_color('white')
-            ax.spines['top'].set_color('white')
-            ax.spines['left'].set_color('white')
-            ax.spines['right'].set_color('white')
-            
+            ax.set_facecolor("#1a1a2e")
+            fig.patch.set_facecolor("#1a1a2e")
+            ax.tick_params(colors="white")
+            ax.xaxis.label.set_color("white")
+            ax.yaxis.label.set_color("white")
+            ax.title.set_color("white")
+            ax.spines["bottom"].set_color("white")
+            ax.spines["top"].set_color("white")
+            ax.spines["left"].set_color("white")
+            ax.spines["right"].set_color("white")
+
             buf = io.BytesIO()
-            fig.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='#1a1a2e')
+            fig.savefig(
+                buf, format="png", dpi=150, bbox_inches="tight", facecolor="#1a1a2e"
+            )
             buf.seek(0)
-            charts['accuracy_f1_history.png'] = buf.read()
+            charts["accuracy_f1_history.png"] = buf.read()
             plt.close(fig)
-    
+
     # Load metadata for threshold analysis
     metadata_path = model_dir / "metadata.json"
     if metadata_path.exists():
         with open(metadata_path) as f:
             meta = json.load(f)
-        
+
         threshold_analysis = meta.get("threshold_analysis")
         if threshold_analysis:
             # Handle both list format and dict format
@@ -229,38 +247,58 @@ def generate_chart_images(model_dir: Path) -> dict[str, bytes]:
                 thresholds = threshold_analysis.get("thresholds", [])
                 far = threshold_analysis.get("far", [])
                 frr = threshold_analysis.get("frr", [])
-            
+
             fig, ax = plt.subplots(figsize=(8, 5))
             optimal = meta.get("threshold", 0.5)
-            
+
             if thresholds and far and frr:
-                ax.plot(thresholds, [v * 100 for v in far], 'r-', label='FAR (False Accept)', linewidth=2)
-                ax.plot(thresholds, [v * 100 for v in frr], 'orange', label='FRR (False Reject)', linewidth=2)
-                ax.axvline(x=optimal, color='cyan', linestyle='--', label=f'Optimal: {optimal:.2f}', linewidth=2)
-                ax.set_xlabel('Threshold')
-                ax.set_ylabel('Rate (%)')
-                ax.set_title('Threshold Analysis (FAR/FRR)')
+                ax.plot(
+                    thresholds,
+                    [v * 100 for v in far],
+                    "r-",
+                    label="FAR (False Accept)",
+                    linewidth=2,
+                )
+                ax.plot(
+                    thresholds,
+                    [v * 100 for v in frr],
+                    "orange",
+                    label="FRR (False Reject)",
+                    linewidth=2,
+                )
+                ax.axvline(
+                    x=optimal,
+                    color="cyan",
+                    linestyle="--",
+                    label=f"Optimal: {optimal:.2f}",
+                    linewidth=2,
+                )
+                ax.set_xlabel("Threshold")
+                ax.set_ylabel("Rate (%)")
+                ax.set_title("Threshold Analysis (FAR/FRR)")
                 ax.legend()
                 ax.grid(True, alpha=0.3)
                 ax.set_xlim(0, 1)
                 ax.set_ylim(0, 100)
-                ax.set_facecolor('#1a1a2e')
-                fig.patch.set_facecolor('#1a1a2e')
-                ax.tick_params(colors='white')
-                ax.xaxis.label.set_color('white')
-                ax.yaxis.label.set_color('white')
-                ax.title.set_color('white')
-                ax.spines['bottom'].set_color('white')
-                ax.spines['top'].set_color('white')
-                ax.spines['left'].set_color('white')
-                ax.spines['right'].set_color('white')
-                
+                ax.set_facecolor("#1a1a2e")
+                fig.patch.set_facecolor("#1a1a2e")
+                ax.tick_params(colors="white")
+                ax.xaxis.label.set_color("white")
+                ax.yaxis.label.set_color("white")
+                ax.title.set_color("white")
+                ax.spines["bottom"].set_color("white")
+                ax.spines["top"].set_color("white")
+                ax.spines["left"].set_color("white")
+                ax.spines["right"].set_color("white")
+
                 buf = io.BytesIO()
-                fig.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='#1a1a2e')
+                fig.savefig(
+                    buf, format="png", dpi=150, bbox_inches="tight", facecolor="#1a1a2e"
+                )
                 buf.seek(0)
-                charts['threshold_analysis.png'] = buf.read()
+                charts["threshold_analysis.png"] = buf.read()
                 plt.close(fig)
-    
+
     return charts
 
 
@@ -390,7 +428,10 @@ async def get_model_metadata(model_id: str) -> ModelMetadata:
 @router.get(
     "/{model_id}/training-history",
     responses={
-        404: {"model": ErrorResponse, "description": "Model or training history not found"},
+        404: {
+            "model": ErrorResponse,
+            "description": "Model or training history not found",
+        },
     },
     summary="Get Training History",
     description="Get training history (loss, accuracy, F1 per epoch) for a model.",
@@ -398,24 +439,26 @@ async def get_model_metadata(model_id: str) -> ModelMetadata:
 async def get_training_history(model_id: str) -> dict:
     """
     Get training history for a model.
-    
+
     Returns loss and accuracy metrics per epoch.
     """
     # Search in custom models first
     model_dir = Config.CUSTOM_MODELS_DIR / model_id
     if not model_dir.exists():
         model_dir = Config.DEFAULT_MODELS_DIR / model_id
-    
+
     if not model_dir.exists():
         raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
-    
+
     history_path = model_dir / "training_history.json"
     if not history_path.exists():
-        raise HTTPException(status_code=404, detail=f"Training history not found for model: {model_id}")
-    
+        raise HTTPException(
+            status_code=404, detail=f"Training history not found for model: {model_id}"
+        )
+
     with open(history_path) as f:
         history = json.load(f)
-    
+
     # If history is a list of epoch objects, convert to dict format
     if isinstance(history, list):
         converted = {
@@ -427,7 +470,7 @@ async def get_training_history(model_id: str) -> dict:
             "learning_rate": [e.get("lr") for e in history],
         }
         return converted
-    
+
     return history
 
 
@@ -479,12 +522,12 @@ async def download_model(model_id: str) -> StreamingResponse:
         for file_path in model_dir.iterdir():
             if file_path.is_file():
                 zf.write(file_path, file_path.name)
-        
+
         # Generate and add chart images
         chart_images = generate_chart_images(model_dir)
         for chart_name, chart_data in chart_images.items():
             zf.writestr(f"charts/{chart_name}", chart_data)
-        
+
         # Add recordings if they exist
         recordings_dir = Config.RECORDINGS_DIR / model_id
         if recordings_dir.exists():
@@ -541,7 +584,7 @@ async def delete_model(model_id: str) -> ModelDeleteResponse:
         model_dir = Config.CUSTOM_MODELS_DIR / model_id
     elif (Config.DEFAULT_MODELS_DIR / model_id).exists():
         model_dir = Config.DEFAULT_MODELS_DIR / model_id
-    
+
     if model_dir is None:
         raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
 
@@ -552,7 +595,7 @@ async def delete_model(model_id: str) -> ModelDeleteResponse:
         raise HTTPException(
             status_code=500, detail=f"Failed to delete model: {e}"
         ) from e
-    
+
     # Delete associated recordings if they exist
     recordings_dir = Config.RECORDINGS_DIR / model_id
     recordings_deleted = False
@@ -582,11 +625,11 @@ async def delete_model(model_id: str) -> ModelDeleteResponse:
 async def move_to_default(model_id: str) -> dict:
     """
     Move a custom model to the default models folder.
-    
+
     This makes the model a "default" model that cannot be deleted through the UI.
     """
     import shutil
-    
+
     # Check if already in default folder
     default_dir = Config.DEFAULT_MODELS_DIR / model_id
     if default_dir.exists():
@@ -594,20 +637,18 @@ async def move_to_default(model_id: str) -> dict:
             status_code=400,
             detail="Model is already in the default folder.",
         )
-    
+
     # Check if custom model exists
     custom_dir = Config.CUSTOM_MODELS_DIR / model_id
     if not custom_dir.exists():
         raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
-    
+
     # Move the model directory
     try:
         shutil.move(str(custom_dir), str(default_dir))
     except OSError as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to move model: {e}"
-        ) from e
-    
+        raise HTTPException(status_code=500, detail=f"Failed to move model: {e}") from e
+
     return {
         "success": True,
         "message": f"Model '{model_id}' moved to default folder",
@@ -624,27 +665,34 @@ async def move_to_default(model_id: str) -> dict:
 async def list_model_recordings(model_id: str) -> dict:
     """
     List recordings associated with a model.
-    
+
     Returns list of recording files with their metadata.
     """
     recordings_dir = Config.RECORDINGS_DIR / model_id
-    
+
     if not recordings_dir.exists():
         return {
             "model_id": model_id,
             "recordings": [],
             "count": 0,
         }
-    
+
     recordings = []
     for rec_file in sorted(recordings_dir.iterdir()):
-        if rec_file.is_file() and rec_file.suffix.lower() in [".wav", ".flac", ".ogg", ".mp3"]:
-            recordings.append({
-                "filename": rec_file.name,
-                "size_kb": rec_file.stat().st_size / 1024,
-                "url": f"/api/models/{model_id}/recordings/{rec_file.name}",
-            })
-    
+        if rec_file.is_file() and rec_file.suffix.lower() in [
+            ".wav",
+            ".flac",
+            ".ogg",
+            ".mp3",
+        ]:
+            recordings.append(
+                {
+                    "filename": rec_file.name,
+                    "size_kb": rec_file.stat().st_size / 1024,
+                    "url": f"/api/models/{model_id}/recordings/{rec_file.name}",
+                }
+            )
+
     return {
         "model_id": model_id,
         "recordings": recordings,
@@ -663,10 +711,10 @@ async def download_recording(model_id: str, filename: str) -> StreamingResponse:
     """
     recordings_dir = Config.RECORDINGS_DIR / model_id
     file_path = recordings_dir / filename
-    
+
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail=f"Recording not found: {filename}")
-    
+
     # Determine media type
     suffix = file_path.suffix.lower()
     media_types = {
@@ -676,7 +724,7 @@ async def download_recording(model_id: str, filename: str) -> StreamingResponse:
         ".mp3": "audio/mpeg",
     }
     media_type = media_types.get(suffix, "application/octet-stream")
-    
+
     return StreamingResponse(
         open(file_path, "rb"),
         media_type=media_type,
@@ -754,35 +802,34 @@ Uses torch.onnx.export for conversion.
 async def export_to_onnx(model_id: str) -> dict:
     """
     Export a model to ONNX format.
-    
+
     Creates model.onnx in the model directory.
     """
-    import tempfile
-    
+
     # Find model directory
     model_dir = None
     model_path = None
-    
+
     custom_path = Config.CUSTOM_MODELS_DIR / model_id / "model.pt"
     if custom_path.exists():
         model_dir = Config.CUSTOM_MODELS_DIR / model_id
         model_path = custom_path
-    
+
     default_path = Config.DEFAULT_MODELS_DIR / model_id / "model.pt"
     if default_path.exists():
         model_dir = Config.DEFAULT_MODELS_DIR / model_id
         model_path = default_path
-    
+
     if not model_path:
         raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
-    
+
     try:
         from ...models.classifier import ASTWakeWordModel
         from transformers import AutoFeatureExtractor
-        
+
         # Load checkpoint
         checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
-        
+
         # Create model
         model = ASTWakeWordModel(
             freeze_base=True,
@@ -792,22 +839,23 @@ async def export_to_onnx(model_id: str) -> dict:
             use_se_block=checkpoint.get("use_se_block", False),
             use_tcn=checkpoint.get("use_tcn", False),
         )
-        
+
         # Load classifier weights
         if "classifier_state_dict" in checkpoint:
             model.classifier.load_state_dict(checkpoint["classifier_state_dict"])
-        
+
         model.eval()
-        
+
         # Create dummy input for ONNX export
         # AST expects input of shape (batch, max_length, num_mel_bins)
         # The feature extractor produces this shape
         feature_extractor = AutoFeatureExtractor.from_pretrained(
             "MIT/ast-finetuned-speech-commands-v2"
         )
-        
+
         # Create dummy audio (1 second at 16kHz)
         import numpy as np
+
         dummy_audio = np.random.randn(16000).astype(np.float32)
         inputs = feature_extractor(
             dummy_audio,
@@ -815,10 +863,10 @@ async def export_to_onnx(model_id: str) -> dict:
             return_tensors="pt",
         )
         dummy_input = inputs["input_values"]
-        
+
         # Export to ONNX
         onnx_path = model_dir / "model.onnx"
-        
+
         torch.onnx.export(
             model,
             dummy_input,
@@ -833,10 +881,10 @@ async def export_to_onnx(model_id: str) -> dict:
                 "logits": {0: "batch_size"},
             },
         )
-        
+
         # Get file size
         onnx_size_mb = onnx_path.stat().st_size / (1024 * 1024)
-        
+
         return {
             "success": True,
             "model_id": model_id,
@@ -844,12 +892,13 @@ async def export_to_onnx(model_id: str) -> dict:
             "onnx_size_mb": round(onnx_size_mb, 2),
             "message": f"Model exported to ONNX format ({onnx_size_mb:.2f} MB)",
         }
-        
+
     except Exception as e:
         import traceback
+
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to export model to ONNX: {e}\n{traceback.format_exc()}"
+            detail=f"Failed to export model to ONNX: {e}\n{traceback.format_exc()}",
         ) from e
 
 
@@ -871,7 +920,7 @@ async def get_onnx_status(model_id: str) -> dict:
             "onnx_path": str(custom_onnx),
             "onnx_size_mb": round(custom_onnx.stat().st_size / (1024 * 1024), 2),
         }
-    
+
     # Check default models
     default_onnx = Config.DEFAULT_MODELS_DIR / model_id / "model.onnx"
     if default_onnx.exists():
@@ -881,7 +930,7 @@ async def get_onnx_status(model_id: str) -> dict:
             "onnx_path": str(default_onnx),
             "onnx_size_mb": round(default_onnx.stat().st_size / (1024 * 1024), 2),
         }
-    
+
     return {
         "model_id": model_id,
         "onnx_available": False,
@@ -903,13 +952,13 @@ async def delete_onnx_export(model_id: str) -> dict:
     if custom_onnx.exists():
         custom_onnx.unlink()
         return {"success": True, "message": "ONNX export deleted"}
-    
+
     # Check default models
     default_onnx = Config.DEFAULT_MODELS_DIR / model_id / "model.onnx"
     if default_onnx.exists():
         default_onnx.unlink()
         return {"success": True, "message": "ONNX export deleted"}
-    
+
     raise HTTPException(status_code=404, detail="ONNX export not found")
 
 
@@ -921,12 +970,12 @@ async def delete_onnx_export(model_id: str) -> dict:
 async def clean_orphaned_recordings() -> dict:
     """
     Delete recordings directories that don't have a corresponding model.
-    
+
     This cleans up recordings from models that were deleted before
     the automatic recording cleanup was implemented.
     """
     import shutil
-    
+
     if not Config.RECORDINGS_DIR.exists():
         return {
             "success": True,
@@ -934,7 +983,7 @@ async def clean_orphaned_recordings() -> dict:
             "deleted": [],
             "count": 0,
         }
-    
+
     # Get all model IDs
     model_ids = set()
     if Config.CUSTOM_MODELS_DIR.exists():
@@ -945,7 +994,7 @@ async def clean_orphaned_recordings() -> dict:
         for d in Config.DEFAULT_MODELS_DIR.iterdir():
             if d.is_dir():
                 model_ids.add(d.name)
-    
+
     # Find and delete orphaned recordings
     deleted = []
     for recordings_dir in Config.RECORDINGS_DIR.iterdir():
@@ -955,7 +1004,7 @@ async def clean_orphaned_recordings() -> dict:
                 deleted.append(recordings_dir.name)
             except OSError:
                 pass  # Skip if can't delete
-    
+
     return {
         "success": True,
         "message": f"Deleted {len(deleted)} orphaned recording(s)",
@@ -978,7 +1027,7 @@ async def list_orphaned_recordings() -> dict:
             "orphaned": [],
             "count": 0,
         }
-    
+
     # Get all model IDs
     model_ids = set()
     if Config.CUSTOM_MODELS_DIR.exists():
@@ -989,18 +1038,20 @@ async def list_orphaned_recordings() -> dict:
         for d in Config.DEFAULT_MODELS_DIR.iterdir():
             if d.is_dir():
                 model_ids.add(d.name)
-    
+
     # Find orphaned recordings
     orphaned = []
     for recordings_dir in Config.RECORDINGS_DIR.iterdir():
         if recordings_dir.is_dir() and recordings_dir.name not in model_ids:
             # Count files in directory
             file_count = sum(1 for f in recordings_dir.iterdir() if f.is_file())
-            orphaned.append({
-                "name": recordings_dir.name,
-                "file_count": file_count,
-            })
-    
+            orphaned.append(
+                {
+                    "name": recordings_dir.name,
+                    "file_count": file_count,
+                }
+            )
+
     return {
         "orphaned": orphaned,
         "count": len(orphaned),

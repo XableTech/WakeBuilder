@@ -73,7 +73,7 @@ class EpochMetrics:
 @dataclass
 class DataStats:
     """Statistics about training data."""
-    
+
     num_recordings: int = 0
     num_positive_samples: int = 0
     num_negative_samples: int = 0
@@ -153,11 +153,11 @@ class JobInfo:
             existing_data_stats = self.training_progress.data_stats
             if epoch == 0:
                 print(f"[DEBUG] Epoch 0: existing data_stats = {existing_data_stats}")
-        
+
         if self.training_progress is None:
             self.training_progress = TrainingProgress()
-            print(f"[DEBUG] Created new TrainingProgress")
-        
+            print("[DEBUG] Created new TrainingProgress")
+
         # Restore data_stats if it was set before
         if existing_data_stats is not None:
             self.training_progress.data_stats = existing_data_stats
